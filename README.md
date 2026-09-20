@@ -2,10 +2,28 @@
 
 Interlock is a real-time intent-coordination system for teams working in the same codebase. Clients publish a structured development intent; when another active intent targets the same scope, the service immediately notifies both participants. This makes overlapping work visible before it becomes duplicated effort or a merge conflict.
 
-The repository contains two independently runnable components:
+The repository contains three independently runnable components:
 
 - The Node.js WebSocket service at the repository root.
 - The Expo mobile application and on-device speech-to-intent pipeline in [`mobile/`](mobile/README.md).
+- The Interlock web console and its OAuth identity service in [`interlock/`](interlock/README.md) —
+  Gmail and GitHub sign-in, sessions, and the fleet console UI.
+
+## Web console
+
+```bash
+cd interlock
+npm install
+npm run dev:full   # identity service (:8787) + Vite app (:3000)
+```
+
+Open `http://localhost:3000`. Sign-in supports **Gmail (Google)** and **GitHub**
+through the standard OAuth 2.0 authorization-code flow (PKCE + single-use signed
+`state`, HttpOnly session cookie). Credentials are required — there is no demo
+sign-in: an unconfigured provider is disabled in the UI and fails closed
+server-side. See [`interlock/README.md`](interlock/README.md) for the credential
+setup and the full API.
+
 
 ## Features
 

@@ -1,0 +1,6 @@
+{
+  "name": "Interlock",
+  "description": "Deterministic P2P monorepo intent locking, agent fleet coordination, and zero-collision developer push interrupts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

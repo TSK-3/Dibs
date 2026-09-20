@@ -32,3 +32,18 @@ yarn-error.*
 *.tsbuildinfo
 
 mobile/assets/models/*.gguf
+
+# Android build artifacts
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+
+# iOS build artifacts
+ios/build/
+ios/Pods/
+ios/*.xcodeproj/xcuserdata/
+ios/*.xcworkspace/xcuserdata/
+
