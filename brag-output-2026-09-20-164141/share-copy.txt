@@ -1,0 +1,1 @@
+Interlock: speak what you're working on, and your teammate's phone buzzes before you collide. No dashboards. No checking in. It just tells you — before you have to ask.

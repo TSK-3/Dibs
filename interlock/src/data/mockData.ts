@@ -197,4 +197,4 @@ export const INITIAL_WIRE_TRACE: WireTraceEvent[] = [
   }
 ];
 
-export const BRAND_LOGO_URL = 'https://lh3.googleusercontent.com/aida/AEtjO1V5PvGdJXJEZxB5uCnLL7z39E-dY294OFBFPrWBxfrU7dcK9fwggOgC2P5N2Z1XfxjEywxhQW43Vfh0F-S268UNWwKlawOA68Kf6XvekyMO1LoZd8O1AjBPHMWCCrX_oFrGWsGy110VWsd9CYUMWUky7jWsWRDdsKTl8fpmtxFBA66_q24451o2TOKqvKXj4bfZDIl36gCXgJxdxijDZL6tFNqUpjrygBtW30n0vb4OqafYtg8QYzEIKQ';
+export const BRAND_LOGO_URL = '/interlock-logo.svg';
