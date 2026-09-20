@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { encryptSecret, decryptSecret, isSealed } from './secretbox.js';
 
 export const USER_ID_PREFIX = 'usr_';
 
@@ -19,11 +20,34 @@ export function userIdFor(provider, providerId) {
 }
 
 export class UserStore {
-  constructor({ filePath, logger = console } = {}) {
+  constructor({ filePath, logger = console, encryptionKey = null } = {}) {
     this.filePath = filePath;
     this.log = logger;
+    // When set, provider access tokens are encrypted at rest (see secretbox).
+    this.encryptionKey = encryptionKey;
     this.users = new Map(); // user_id → record
     this.restore();
+  }
+
+  /** Tokens never touch disk in plaintext when an encryption key is present. */
+  sealToken(accessToken) {
+    return this.encryptionKey ? encryptSecret(accessToken, this.encryptionKey) : accessToken;
+  }
+
+  openToken(sealed) {
+    if (typeof sealed !== 'string') return null;
+    if (isSealed(sealed) && this.encryptionKey) return decryptSecret(sealed, this.encryptionKey);
+    return this.encryptionKey ? null : sealed; // plaintext only readable in keyless (test) mode
+  }
+
+  /** Decrypted provider token for API calls, or null when absent/unreadable. */
+  getProviderToken(userId, provider) {
+    const user = this.users.get(userId);
+    const token = user?.providerToken;
+    if (!token || token.provider !== provider) return null;
+    const accessToken = this.openToken(token.accessToken);
+    if (!accessToken) return null;
+    return { accessToken, scope: token.scope ?? null, tokenType: token.tokenType ?? null, fetchedAt: token.fetchedAt ?? null };
   }
 
   get(userId) {
@@ -41,8 +65,12 @@ export class UserStore {
    * Idempotent sign-in write. First sign-in creates the record; later ones
    * refresh the fields the provider owns (display name, avatar, email) and bump
    * the login counters. `createdAt` is never moved.
+   *
+   * `providerToken` ({ accessToken, scope, tokenType }) is the OAuth token this
+   * login just exchanged — stored encrypted (sealToken) so the service can call
+   * provider APIs later. A login without a fresh token keeps the stored one.
    */
-  upsertFromProfile(profile, { now = Date.now() } = {}) {
+  upsertFromProfile(profile, { providerToken = null, now = Date.now() } = {}) {
     const id = userIdFor(profile.provider, profile.providerId);
     const existing = this.users.get(id);
     const iso = new Date(now).toISOString();
@@ -60,6 +88,17 @@ export class UserStore {
       lastLoginAt: iso,
       loginCount: (existing?.loginCount ?? 0) + 1,
     };
+    if (providerToken?.accessToken) {
+      record.providerToken = {
+        provider: profile.provider,
+        accessToken: this.sealToken(providerToken.accessToken),
+        scope: providerToken.scope ?? null,
+        tokenType: providerToken.tokenType ?? null,
+        fetchedAt: iso,
+      };
+    } else if (existing?.providerToken) {
+      record.providerToken = existing.providerToken;
+    }
     this.users.set(id, record);
     this.save();
     return record;

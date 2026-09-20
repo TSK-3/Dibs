@@ -17,10 +17,12 @@ import path from 'node:path';
 import express from 'express';
 import { loadConfig, resolveSessionSecret } from './config.js';
 import { createLogger } from './logger.js';
-import { DIST_DIR } from './paths.js';
+import { DIST_DIR, DEFAULT_DATA_DIR } from './paths.js';
 import { UserStore } from './users.js';
 import { createSessionCodec, serializeCookie, clearCookie, parseCookies } from './session.js';
 import { PROVIDERS, ProviderError, describeProviders, getProvider, maskToken } from './providers.js';
+import { listRepos } from './github.js';
+import { WorkspaceStore, publicWorkspace, validateWorkspaceInput } from './workspaces.js';
 import {
   buildAuthorizeUrl,
   buildRedirectUri,
@@ -84,12 +86,23 @@ export function createApp(options = {}) {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
   const providers = options.providers ?? PROVIDERS;
-  const users = options.users ?? new UserStore({ filePath: config.usersFile, logger });
 
+  // The session key must be resolved before the stores: the user directory
+  // derives an encryption key from it to seal provider tokens at rest.
   const sessionSecret = options.sessionSecret ?? resolveSessionSecret({
     logger,
     production: config.production,
     filePath: config.sessionSecretFile,
+  });
+
+  const users = options.users ?? new UserStore({
+    filePath: config.usersFile,
+    logger,
+    encryptionKey: sessionSecret,
+  });
+  const workspaces = options.workspaces ?? new WorkspaceStore({
+    filePath: config.workspacesFile ?? path.join(config.dataDir ?? DEFAULT_DATA_DIR, 'workspaces.json'),
+    logger,
   });
   const sessionCodec = options.sessionCodec ??
     createSessionCodec({ secret: sessionSecret, ttlMs: config.sessionTtlMs });
@@ -160,6 +173,23 @@ export function createApp(options = {}) {
   const readSession = (req) => {
     const token = parseCookies(req.headers.cookie)[config.sessionCookie];
     return token ? sessionCodec.read(token) : null;
+  };
+
+  /**
+   * Shared guard for the authenticated API surface (workspaces, GitHub proxy).
+   * Attaches the fresh user record as req.authUser or answers 401 JSON.
+   */
+  const requireSession = (req, res, next) => {
+    const session = readSession(req);
+    if (!session) return res.status(401).json({ ok: false, error: 'no_session' });
+    const user = users.get(session.sub);
+    if (!user) {
+      // The directory no longer knows this subject (fresh .data) — drop the cookie.
+      res.append('Set-Cookie', clearCookie(config.sessionCookie, cookieOptions()));
+      return res.status(401).json({ ok: false, error: 'unknown_identity' });
+    }
+    req.authUser = user;
+    return next();
   };
 
   /** Validate and burn the one-time state cookie that guards the callback. */
@@ -320,11 +350,107 @@ export function createApp(options = {}) {
       if (!profile.emailVerified) {
         logger.warn(`[auth] ${provider.id} account ${profile.providerId} has an unverified email address`);
       }
-      const user = users.upsertFromProfile(profile);
+      // Keep the freshly exchanged access token (encrypted at rest) so the
+      // service can call provider APIs later — e.g. list GitHub repositories.
+      const user = users.upsertFromProfile(profile, {
+        providerToken: { accessToken: token.accessToken, scope: token.scope, tokenType: token.tokenType },
+      });
       return issueSession(res, user, { returnTo: pending.returnTo });
     } catch (err) {
       return handleCallbackFailure(res, err, provider, pending.returnTo);
     }
+  });
+
+  // ── GitHub integration: repositories owned by the signed-in account ──────
+  api.get('/github/repos', requireSession, async (req, res) => {
+    if (req.authUser.provider !== 'github') {
+      return res.status(403).json({ ok: false, error: 'not_github_session' });
+    }
+    const stored = users.getProviderToken(req.authUser.id, 'github');
+    if (!stored) {
+      // Sessions issued before token persistence (or a revoked grant) must
+      // re-authenticate once so the service can hold a fresh token again.
+      return res.status(409).json({ ok: false, error: 'github_token_missing' });
+    }
+    try {
+      const repos = await listRepos({ accessToken: stored.accessToken, fetchImpl });
+      logger.info(`[github] repos: ${repos.length} repository(ies) for ${req.authUser.id}`);
+      return res.json({ ok: true, repos });
+    } catch (err) {
+      if (err instanceof ProviderError) {
+        logger.warn(`[github] repos failed: ${err.code}: ${err.message}`);
+        const status =
+          err.code === 'github_rate_limited' ? 429 :
+          err.code === 'github_token_missing' || err.code === 'github_token_rejected' ? 409 : 502;
+        return res.status(status).json({ ok: false, error: err.code });
+      }
+      logger.error(`[github] repos unexpected failure: ${err?.stack ?? err}`);
+      return res.status(502).json({ ok: false, error: 'github_unreachable' });
+    }
+  });
+
+  // ── Workspaces: create / list / join / inspect / rotate code / delete ────
+  api.post('/workspaces', requireSession, rateLimited, (req, res) => {
+    const validation = validateWorkspaceInput(req.body ?? {});
+    if (!validation.ok) {
+      return res.status(400).json({ ok: false, error: 'validation_error', detail: validation.detail });
+    }
+    const { workspace, inviteCode } = workspaces.create({
+      owner: req.authUser,
+      name: validation.name,
+      repo: validation.repo,
+    });
+    logger.info(
+      `[workspaces] ${workspace.id} "${workspace.name}" created by ${req.authUser.id} (repo=${workspace.repo.fullName})`,
+    );
+    // The invite code is visible exactly once here — only its hash is stored.
+    return res.status(201).json({ ok: true, workspace: publicWorkspace(workspace), inviteCode });
+  });
+
+  api.get('/workspaces', requireSession, (req, res) => {
+    return res.json({ ok: true, workspaces: workspaces.listForUser(req.authUser.id).map(publicWorkspace) });
+  });
+
+  api.post('/workspaces/join', requireSession, rateLimited, (req, res) => {
+    const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
+    if (code.length !== 6) {
+      return res.status(400).json({ ok: false, error: 'validation_error', detail: 'code must be exactly 6 digits' });
+    }
+    const result = workspaces.join(code, req.authUser);
+    if (!result.ok) {
+      logger.warn(`[workspaces] join failed for ${req.authUser.id}: ${result.error}`);
+      return res.status(result.error === 'invalid_code' ? 404 : 400).json({ ok: false, error: result.error });
+    }
+    logger.info(`[workspaces] ${result.workspace.id} joined by ${req.authUser.id}`);
+    return res.json({ ok: true, workspace: publicWorkspace(result.workspace) });
+  });
+
+  api.get('/workspaces/:id', requireSession, (req, res) => {
+    const record = workspaces.get(req.params.id);
+    if (!record || !workspaces.isMember(record, req.authUser.id)) {
+      return res.status(404).json({ ok: false, error: 'not_found' });
+    }
+    return res.json({ ok: true, workspace: publicWorkspace(record) });
+  });
+
+  api.post('/workspaces/:id/invite/regenerate', requireSession, rateLimited, (req, res) => {
+    const result = workspaces.regenerateCode(req.params.id, req.authUser.id);
+    if (!result.ok) {
+      const status = result.error === 'not_found' ? 404 : result.error === 'forbidden' ? 403 : 400;
+      return res.status(status).json({ ok: false, error: result.error });
+    }
+    logger.info(`[workspaces] ${req.params.id} invite code rotated by ${req.authUser.id}`);
+    return res.json({ ok: true, inviteCode: result.inviteCode });
+  });
+
+  api.delete('/workspaces/:id', requireSession, (req, res) => {
+    const result = workspaces.remove(req.params.id, req.authUser.id);
+    if (!result.ok) {
+      const status = result.error === 'not_found' ? 404 : result.error === 'forbidden' ? 403 : 400;
+      return res.status(status).json({ ok: false, error: result.error });
+    }
+    logger.info(`[workspaces] ${req.params.id} deleted by ${req.authUser.id}`);
+    return res.json({ ok: true });
   });
 
   // Every /api miss is JSON — never the SPA shell.

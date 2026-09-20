@@ -1,6 +1,12 @@
+// src/App.tsx — the workspace shell.
+//
+// Providers, outside-in: AuthProvider (who is signed in) → WorkspaceProvider
+// (which workspace is active) → LiveProvider (the live agent mesh socket).
+// Every view consumes those contexts directly — there is no mock state anywhere
+// in this file, and Connect Agents / Fleet Dashboard are gated on an active
+// workspace because they are meaningless without one.
 import React, { useState } from 'react';
-import { NavigationPath, AgentDescriptor, ScopeMatrixRow, WireTraceEvent } from './types';
-import { INITIAL_AGENTS, INITIAL_MATRIX, INITIAL_WIRE_TRACE } from './data/mockData';
+import { NavigationPath } from './types';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { AuthView } from './components/views/AuthView';
@@ -8,94 +14,87 @@ import { TeamWorkspaceView } from './components/views/TeamWorkspaceView';
 import { ConnectAgentsView } from './components/views/ConnectAgentsView';
 import { FleetDashboardView } from './components/views/FleetDashboardView';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { WorkspaceProvider, useWorkspace } from './state/WorkspaceContext';
+import { LiveProvider, useLive } from './state/LiveContext';
 
-/**
- * The workspace shell. It only ever renders behind the sign-in gate below:
- * every view here belongs to a verified Gmail or GitHub identity, and the
- * header/sidebar reflect that session instead of a hard-coded flag.
- */
-const Workspace: React.FC = () => {
-  const { status, user, signOut } = useAuth();
+/** The signed-in shell: header, sidebar, and the routed main surface. */
+const WorkspaceShell: React.FC = () => {
+  const { user, signOut } = useAuth();
+  const { activeWorkspace } = useWorkspace();
+  const { status: liveStatus } = useLive();
   const [currentPath, setCurrentPath] = useState<NavigationPath>('team-workspace');
-  const [agents, setAgents] = useState<AgentDescriptor[]>(INITIAL_AGENTS);
-  const [matrixRows, setMatrixRows] = useState<ScopeMatrixRow[]>(INITIAL_MATRIX);
-  const [wireTrace, setWireTrace] = useState<WireTraceEvent[]>(INITIAL_WIRE_TRACE);
 
-  const handleToggleAgentStatus = (agentId: string) => {
-    setAgents((prev) =>
-      prev.map((ag) => {
-        if (ag.id === agentId) {
-          const nextStatus = ag.status === 'CONNECTED' ? 'READY TO PAIR' : 'CONNECTED';
-          return {
-            ...ag,
-            status: nextStatus,
-            portOrSocket:
-              nextStatus === 'CONNECTED'
-                ? 'PORT: 8099 // SYNCED'
-                : 'PROBE: STANDBY',
-            scopedRange:
-              nextStatus === 'CONNECTED'
-                ? ag.scopedRange || 'packages/common/*'
-                : ag.scopedRange
-          };
-        }
-        return ag;
-      })
-    );
-  };
+  return (
+    <div className="min-h-screen bg-[#121315] text-[#e3e2e3] font-sans flex flex-col selection:bg-white selection:text-[#121315]">
+      <Header
+        currentPath={currentPath}
+        onNavigate={setCurrentPath}
+        user={user}
+        onSignOut={() => void signOut()}
+      />
 
-  const handleAddScope = (newScope: { module: string; file: string; lockType: 'EXCLUSIVE' | 'SHARED' }) => {
-    const newRow: ScopeMatrixRow = {
-      id: 'row-' + Date.now(),
-      module: newScope.module,
-      owner: user?.name ?? 'Unknown operator',
-      assignedAgent: 'Cursor Composer',
-      fileTarget: '.../' + newScope.file.split('/').pop(),
-      lockType: newScope.lockType,
-      timeHeld: '00m 02s'
-    };
-    setMatrixRows((prev) => [newRow, ...prev]);
+      <div className="flex-1 flex w-full pt-16">
+        <Sidebar
+          currentPath={currentPath}
+          onNavigate={setCurrentPath}
+          clusterHealth={liveStatus === 'online' ? 'LIVE MESH' : liveStatus === 'connecting' ? 'SYNCING…' : 'OFFLINE'}
+          user={user}
+        />
 
-    const logEvent: WireTraceEvent = {
-      id: 'evt-' + Date.now(),
-      timestamp: new Date().toTimeString().split(' ')[0] + '.000',
-      type: 'scope.ad_hoc.claim',
-      payload: {
-        file: newScope.file,
-        lock_type: newScope.lockType,
-        granted: true,
-        claimed_by: user?.id ?? 'unknown'
-      },
-      severity: 'info'
-    };
-    setWireTrace((prev) => [logEvent, ...prev]);
-  };
+        <main className="flex-1 w-full min-h-[calc(100vh-4rem)] overflow-y-auto lg:pl-60">
+          {currentPath === 'team-workspace' && <TeamWorkspaceView onNavigate={setCurrentPath} />}
 
-  const handleReleaseMatrixRow = (id: string) => {
-    setMatrixRows((prev) => prev.filter((r) => r.id !== id));
-  };
+          {currentPath === 'connect-agents' &&
+            (activeWorkspace ? (
+              <ConnectAgentsView onNavigate={setCurrentPath} />
+            ) : (
+              <WorkspaceRequired onNavigate={setCurrentPath} />
+            ))}
 
-  const handleForceReleaseAgent = (agentId: string) => {
-    setAgents((prev) =>
-      prev.map((ag) => {
-        if (ag.id === agentId) {
-          return {
-            ...ag,
-            lockType: undefined,
-            fileLockType: undefined,
-            directive: 'Idle standby. AST lock released.',
-            tokensPerSec: 0,
-            claimTtlRemaining: 'Released'
-          };
-        }
-        return ag;
-      })
-    );
-  };
+          {currentPath === 'agent-fleet-dashboard' &&
+            (activeWorkspace ? <FleetDashboardView /> : <WorkspaceRequired onNavigate={setCurrentPath} />)}
+
+          {currentPath === 'auth' && <AuthView onNavigate={setCurrentPath} />}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+/** Shown when Connect Agents / Fleet Dashboard is opened with no workspace. */
+const WorkspaceRequired: React.FC<{ onNavigate: (path: NavigationPath) => void }> = ({ onNavigate }) => (
+  <div className="w-full px-6 lg:px-12 py-10 max-w-6xl mx-auto flex flex-col items-center gap-6 text-center">
+    <span className="material-symbols-outlined text-[40px] text-[#8e9192]">meeting_room</span>
+    <h1 className="text-2xl text-white font-semibold">No workspace selected</h1>
+    <p className="text-sm text-[#c4c7c8] max-w-md leading-relaxed">
+      Agents, claims, and collisions live inside a workspace. Create one (bound to one of your GitHub repositories) or
+      join a teammate's with an invite code first.
+    </p>
+    <button
+      onClick={() => onNavigate('team-workspace')}
+      className="px-6 py-3 bg-white text-[#121315] font-semibold text-sm rounded-xl hover:bg-[#e2e2e2] transition-colors cursor-pointer shadow"
+    >
+      Set up a workspace
+    </button>
+  </div>
+);
+
+/** Loading screen while the session is being probed on first paint. */
+const SessionLoading: React.FC = () => (
+  <div className="min-h-screen bg-[#121315] text-[#8e9192] font-sans flex items-center justify-center">
+    <span className="font-mono text-xs uppercase tracking-widest animate-pulse">Checking session…</span>
+  </div>
+);
+
+const Workspace: React.FC = () => {
+  const { status, user } = useAuth();
+  const [currentPath, setCurrentPath] = useState<NavigationPath>('team-workspace');
 
   // ── Sign-in gate ────────────────────────────────────────────────────────
   // Without a verified session the workspace is unreachable: the only screen on
   // offer is the Gmail / GitHub sign-in surface.
+  if (status === 'loading') return <SessionLoading />;
+
   if (status !== 'authenticated' || !user) {
     return (
       <div className="min-h-screen bg-[#121315] text-[#e3e2e3] font-sans flex flex-col selection:bg-white selection:text-[#121315]">
@@ -110,53 +109,11 @@ const Workspace: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#121315] text-[#e3e2e3] font-sans flex flex-col selection:bg-white selection:text-[#121315]">
-      {/* Top Fixed Header with exact order: Team & Workspace -> Connect Agents -> Fleet Dashboard */}
-      <Header
-        currentPath={currentPath}
-        onNavigate={setCurrentPath}
-        user={user}
-        onSignOut={() => void signOut()}
-      />
-
-      <div className="flex-1 flex w-full pt-16">
-        {/* Left Sidebar (clean workflow flow) */}
-        <Sidebar
-          currentPath={currentPath}
-          onNavigate={setCurrentPath}
-          clusterHealth="100% NOMINAL"
-          user={user}
-        />
-
-        {/* Main Content Area with generous whitespace and breathable padding */}
-        <main className="flex-1 w-full min-h-[calc(100vh-4rem)] overflow-y-auto lg:pl-60">
-          {currentPath === 'team-workspace' && (
-            <TeamWorkspaceView onNavigate={setCurrentPath} />
-          )}
-
-          {currentPath === 'connect-agents' && (
-            <ConnectAgentsView
-              agents={agents}
-              onToggleAgentStatus={handleToggleAgentStatus}
-              onNavigate={setCurrentPath}
-            />
-          )}
-
-          {currentPath === 'agent-fleet-dashboard' && (
-            <FleetDashboardView
-              agents={agents}
-              matrixRows={matrixRows}
-              wireTrace={wireTrace}
-              onAddScope={handleAddScope}
-              onReleaseMatrixRow={handleReleaseMatrixRow}
-              onForceReleaseAgent={handleForceReleaseAgent}
-            />
-          )}
-
-          {currentPath === 'auth' && <AuthView onNavigate={setCurrentPath} />}
-        </main>
-      </div>
-    </div>
+    <WorkspaceProvider>
+      <LiveProvider user={user}>
+        <WorkspaceShell />
+      </LiveProvider>
+    </WorkspaceProvider>
   );
 };
 

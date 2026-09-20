@@ -86,6 +86,48 @@ Failures never leak: the SPA receives a stable error code (`state_mismatch`,
 | `GET` | `/api/auth/:provider/callback` | Exchange code, upsert identity, mint session (302) |
 | `GET` | `/api/auth/me` | Current session + profile (401 when signed out) |
 | `POST` | `/api/auth/logout` | Clear the session cookie |
+| `GET` | `/api/github/repos` | Public repositories owned by the signed-in GitHub account |
+| `POST` | `/api/workspaces` | Create a workspace (returns the invite code **once**) |
+| `GET` | `/api/workspaces` | Workspaces the session owns or belongs to |
+| `GET` | `/api/workspaces/:id` | One workspace (members only) |
+| `POST` | `/api/workspaces/join` | Join by 6-digit invite code (server-verified) |
+| `POST` | `/api/workspaces/:id/invite/regenerate` | Rotate the invite code (owner) |
+| `DELETE` | `/api/workspaces/:id` | Delete the workspace (owner) |
+
+## Workspaces & GitHub repositories
+
+After sign-in the service keeps the freshly exchanged provider access token,
+**encrypted at rest** (AES-256-GCM, key derived from the session secret) inside
+`.data/users.json`. That is what powers `GET /api/github/repos`: the account's
+**public** repositories, newest activity first. Private repositories are
+deliberately out of scope — listing them would require GitHub's broad `repo`
+scope, and the console does not ask for it.
+
+Workspaces bind a name to one repository plus members. The 6-digit invite code
+is generated server-side and shown exactly once; only its sha256 hash is stored,
+and joins are verified with a timing-safe comparison. Workspace state lives in
+`.data/workspaces.json` (git-ignored).
+
+The sign-in gate also means the token only exists for sessions created **after**
+token persistence shipped — an older session must sign in once more before
+`/api/github/repos` works (the UI says so explicitly via `github_token_missing`).
+
+## Live agent mesh (root backend)
+
+`npm run dev:full` starts THREE processes: the identity service (:8787), the
+Vite app (:3000), and the repo-root WebSocket backend (:8090, with
+`SCOPES_OPEN=1` so file-path scopes like `auth/login.tsx` work alongside the
+enum; the port stays off Windows' commonly reserved :8080). The console
+connects to the mesh through the Vite `/ws` proxy the moment a workspace is
+active; agents join by running:
+
+```bash
+node scripts/agent.mjs --user cursor-ide --team <workspaceId> --scope auth
+```
+
+`scripts/agent.mjs` posts a real intent, holds the claim, prints interrupts,
+and releases the claim on Ctrl+C. Everything the Fleet Dashboard shows —
+roster, claims, collisions, interrupts — is live backend traffic, no mocks.
 
 ## Configuration
 

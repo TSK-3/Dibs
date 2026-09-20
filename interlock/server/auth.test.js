@@ -46,6 +46,8 @@ async function harness({ env = {}, config = {}, fetchImpl } = {}) {
       clientUrl: 'http://localhost:3000',
       usersFile: path.join(dir, 'users.json'),
       sessionSecretFile: path.join(dir, 'session-secret'),
+      workspacesFile: path.join(dir, 'workspaces.json'),
+      dataDir: dir,
       cookieSecure: false,
       rateMax: 10_000,
       ...config,
@@ -452,6 +454,15 @@ test('GitHub sign-in uses the confidential-client flow and the verified-email fa
     assert.equal(body.user.name, 'The Octocat');
     assert.equal(body.user.email, 'mona@example.com', 'private email resolved through /user/emails');
     assert.equal(body.user.avatarUrl, 'https://avatars.githubusercontent.com/u/583231');
+
+    // The freshly exchanged access token must be persisted ENCRYPTED so later
+    // API calls (repository listing) can use it — never in plaintext on disk.
+    const stored = JSON.parse(fs.readFileSync(h.usersFile, 'utf8'));
+    const record = Object.values(stored.users)[0];
+    assert.match(record.providerToken?.accessToken ?? '', /^v1\./, 'access token stored as a v1 secretbox envelope');
+    assert.ok(!JSON.stringify(stored).includes('github-access-token'), 'the plaintext token never reaches disk');
+    assert.equal(record.providerToken.scope, 'read:user,user:email');
+    assert.equal(record.providerToken.provider, 'github');
 
     assert.deepEqual(seen.requests, [
       'https://github.com/login/oauth/access_token',

@@ -4,8 +4,12 @@
 //   hello / check_intent → scope_status / request_state → state /
 //   complete_ack / error / claim_expired — check_intent exists so the §3.5
 //   MCP tools can query a scope WITHOUT claiming it.
+//
+// SCOPES_OPEN (config): when on, the closed enum gains hierarchical scopes
+// matching OPEN_SCOPE_PATTERN ("auth/login.tsx") and conflicts use segment
+// overlap; otherwise closed-enum + exact-match behaviour is unchanged.
 import { findConflicts, interruptForHolder, interruptForPoster } from './matcher.js';
-import { ID_PATTERN, MAX_FIELD_LENGTH } from './config.js';
+import { ID_PATTERN, MAX_FIELD_LENGTH, SCOPES_OPEN, OPEN_SCOPE_PATTERN } from './config.js';
 
 const FIELD_SPECS = {
   post_intent: { user_id: 'string', scope: 'string', summary: 'string', rationale: 'string', timestamp: 'number' },
@@ -59,16 +63,17 @@ function checkIdentity(session, msg) {
 }
 
 function checkScope(session, msg, scopeSet) {
-  if (!scopeSet.has(msg.scope)) {
-    sendErr(
-      session,
-      'unknown_scope',
-      `Scope "${msg.scope}" is not in the closed enum. Allowed: ${[...scopeSet].join(', ')}`,
-      { scope: msg.scope, allowed: [...scopeSet] },
-    );
-    return false;
-  }
-  return true;
+  if (scopeSet.has(msg.scope)) return true;
+  // Open mode: hierarchical scopes (e.g. "auth/login.tsx") are accepted in
+  // addition to the closed enum. Closed mode rejects everything not in the enum.
+  if (SCOPES_OPEN && OPEN_SCOPE_PATTERN.test(msg.scope)) return true;
+  sendErr(
+    session,
+    'unknown_scope',
+    `Scope "${msg.scope}" is not in the closed enum. Allowed: ${[...scopeSet].join(', ')}${SCOPES_OPEN ? ' (open mode also accepts hierarchical scopes like "auth/login.tsx")' : ''}`,
+    { scope: msg.scope, allowed: [...scopeSet] },
+  );
+  return false;
 }
 
 /** Identities become object keys, log lines, and snapshot JSON — keep them tame. */
@@ -84,18 +89,22 @@ function checkIdentityFormat(userId, session) {
 
 // Welcome/sync payload — sent on connect and on request_state. Lets a
 // reconnecting client rebuild its UI from server truth (PRD §3.1 reconnects).
-export function statePayload(store, session) {
+// `presence` is optional; when provided the payload also carries the live
+// roster so the console can show who is on the mesh right now.
+export function statePayload(store, session, presence = null) {
   const yours = store.getUserClaims(session.teamId, session.userId);
   const team = store.getTeamClaims(session.teamId);
   return {
     type: 'state',
     team_id: session.teamId,
     user_id: session.userId,
+    agents: presence ? presence.roster(session.teamId) : [],
     your_claims: yours.map(({ scope, claim }) => ({
       scope,
       summary: claim.summary,
       rationale: claim.rationale,
       timestamp: claim.timestamp,
+      received_at: claim.received_at,
     })),
     team_claims: team.map(({ scope, user_id, claim }) => ({
       scope,
@@ -103,12 +112,13 @@ export function statePayload(store, session) {
       summary: claim.summary,
       rationale: claim.rationale,
       timestamp: claim.timestamp,
+      received_at: claim.received_at,
     })),
   };
 }
 
 export function handleMessage(session, raw, deps) {
-  const { store, scopeSet, register, logger } = deps;
+  const { store, scopeSet, register, logger, presence } = deps;
 
   let msg;
   try {
@@ -131,10 +141,12 @@ export function handleMessage(session, raw, deps) {
     if (!idCheck.ok) return sendErr(session, 'bad_request', idCheck.message);
     session.userId = msg.user_id;
     session.teamId = msg.team_id;
+    session.client = typeof msg.client === 'string' && ID_PATTERN.test(msg.client) ? msg.client : 'client';
     session.identified = true;
     register(session);
+    presence?.join({ user_id: session.userId, team_id: session.teamId, connected_at: Date.now(), client: session.client });
     logger.log?.(`[ws] ${session.userId}@${session.teamId} connected via hello`);
-    return session.send(statePayload(store, session));
+    return session.send(statePayload(store, session, presence));
   }
 
   if (!session.identified) {
@@ -153,7 +165,7 @@ export function handleMessage(session, raw, deps) {
     case 'check_intent':
       return handleCheckIntent(session, msg, deps);
     case 'request_state':
-      return session.send(statePayload(store, session));
+      return session.send(statePayload(store, session, presence));
     default:
       return sendErr(session, 'bad_request', `Unknown message type "${msg.type}"`);
   }
@@ -188,7 +200,8 @@ function handlePostIntent(session, msg, deps) {
     received_at: now(),
   };
 
-  const conflicts = findConflicts(store, teamId, userId, scope);
+  // In open mode conflicts use segment-aware overlap ("auth" vs "auth/x.tsx").
+  const conflicts = findConflicts(store, teamId, userId, scope, { overlap: deps.overlap === true });
   store.setClaim(teamId, userId, claim); // poster's claim recorded either way
   session.metrics?.inc('intents_posted_total');
   if (conflicts.length > 0) session.metrics?.inc('conflicts_detected_total');

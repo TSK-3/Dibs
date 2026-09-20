@@ -27,6 +27,7 @@ export const CLIENT_URL = trimSlashes(process.env.APP_URL || process.env.CLIENT_
 export const DATA_DIR = process.env.AUTH_DATA_DIR || DEFAULT_DATA_DIR;
 export const USERS_FILE = process.env.AUTH_USERS_FILE || path.join(DATA_DIR, 'users.json');
 export const SESSION_SECRET_FILE = process.env.AUTH_SESSION_SECRET_FILE || path.join(DATA_DIR, 'session-secret');
+export const WORKSPACES_FILE = process.env.AUTH_WORKSPACES_FILE || path.join(DATA_DIR, 'workspaces.json');
 
 // Express `trust proxy`. Leave unset locally; set to 1 (or a CIDR list) when the
 // service runs behind a load balancer so req.ip — and rate limiting — is honest.

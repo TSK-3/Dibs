@@ -9,10 +9,11 @@ import {
   PORT, HOST, WS_PATH, MAX_MESSAGE_BYTES, PING_INTERVAL_MS,
   SCOPES, SCOPE_SET, SNAPSHOT_PATH, CLAIM_TTL_MS, ROOT_DIR,
   LOG_LEVEL, LOG_JSON, RATE_CAPACITY, RATE_REFILL_PER_SEC,
-  MAX_CLIENTS, AUTH_TOKEN, ID_PATTERN,
+  MAX_CLIENTS, AUTH_TOKEN, ID_PATTERN, SCOPES_OPEN,
 } from './config.js';
 import { ClaimStore } from './store.js';
 import { handleMessage, statePayload } from './protocol.js';
+import { createPresence } from './presence.js';
 import { createLogger } from './logger.js';
 import { createMetrics } from './metrics.js';
 import { createRateLimiter } from './ratelimit.js';
@@ -45,6 +46,7 @@ export function startServer(options = {}) {
   const authToken = options.authToken ?? AUTH_TOKEN;
 
   const store = new ClaimStore({ snapshotPath, logger });
+  const presence = options.presence ?? createPresence({ logger });
 
   // Same process also serves the browser test bench + tiny JSON endpoints.
   const httpServer = http.createServer((req, res) => {
@@ -119,7 +121,28 @@ export function startServer(options = {}) {
     if (set.size === 0) byUser.delete(key);
   };
 
-  const deps = { store, sendToUser, register, scopeSet, scopes, now: () => Date.now(), logger };
+  const deps = {
+    store, sendToUser, register, scopeSet, scopes, now: () => Date.now(), logger,
+    presence, overlap: SCOPES_OPEN,
+  };
+
+  // Roster changes go to the whole team, on every live device. byUser keys are
+  // `${teamId}::${userId}`, so a prefix scan finds the team's sockets cheaply.
+  presence.subscribe(({ teamId, agents }) => {
+    const data = JSON.stringify({ type: 'roster', team_id: teamId, agents });
+    for (const [key, set] of byUser) {
+      if (!key.startsWith(`${teamId}::`)) continue;
+      for (const ws of set) {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(data);
+          } catch {
+            /* socket died mid-send */
+          }
+        }
+      }
+    }
+  });
 
   wss.on('connection', (ws, req) => {
     metrics.inc('ws_connections_total');
@@ -165,6 +188,7 @@ export function startServer(options = {}) {
     // Identity via query params (preferred). A `hello` message also works.
     const qUserId = url.searchParams.get('user_id');
     const qTeamId = url.searchParams.get('team_id');
+    const qClient = url.searchParams.get('client');
     if (qUserId && qTeamId) {
       if (!ID_PATTERN.test(qUserId) || !ID_PATTERN.test(qTeamId)) {
         metrics.inc('ws_rejected_total', 1, { reason: 'bad_identity' });
@@ -181,9 +205,13 @@ export function startServer(options = {}) {
       }
       session.userId = qUserId;
       session.teamId = qTeamId;
+      session.client = qClient && ID_PATTERN.test(qClient) ? qClient : 'client';
       session.identified = true;
       register(session);
-      session.send(statePayload(store, session));
+      presence.join({
+        user_id: session.userId, team_id: session.teamId, connected_at: Date.now(), client: session.client,
+      });
+      session.send(statePayload(store, session, presence));
       logger.log?.(`[ws] ${qUserId}@${qTeamId} connected`);
     } else {
       logger.log?.('[ws] unidentified socket — waiting for hello message');
@@ -216,8 +244,14 @@ export function startServer(options = {}) {
 
     // Disconnect handling (PRD §3.1): socket goes away, CLAIMS do not — they
     // live in the store keyed by identity, so a reconnect finds everything.
+    // Presence DOES drop — but only when this was the user's last live socket.
     ws.on('close', () => {
-      if (session.identified) unregister(session);
+      if (session.identified) {
+        unregister(session);
+        if (!byUser.has(keyOf(session.teamId, session.userId))) {
+          presence.leave(session.teamId, session.userId);
+        }
+      }
     });
     ws.on('error', (err) => logger.warn?.(`[ws] socket error (${session.userId ?? 'unknown'}): ${err.message}`));
   });

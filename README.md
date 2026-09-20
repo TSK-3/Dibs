@@ -41,10 +41,18 @@ Requirements: Node.js 18.17 or later.
 
 ```bash
 npm install
-npm start
+npm start        # live-interrupt backend (:8080)
 ```
 
-The server starts on `ws://localhost:8080/ws`. Open `http://localhost:8080/` in two browser tabs to use the included test bench.
+The web console needs it too — `cd interlock && npm run dev:full` starts the
+identity service (:8787), the Vite app (:3000), **and this backend (:8080 with
+`SCOPES_OPEN=1`)** together. Launch agents against the mesh:
+
+```bash
+node scripts/agent.mjs --user cursor-ide --team <workspaceId> --scope auth
+```
+
+The backend starts on `ws://localhost:8080/ws`. Open `http://localhost:8080/` in two browser tabs to use the included test bench.
 
 ## Commands
 

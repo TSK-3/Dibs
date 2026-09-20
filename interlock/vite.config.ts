@@ -22,6 +22,19 @@ export default defineConfig(() => {
           target: process.env.AUTH_SERVER_URL ?? 'http://localhost:8787',
           changeOrigin: false,
         },
+        // Live agent mesh: the root WS backend. The dev script starts it on
+        // :8090 (some Windows machines reserve :8080 for WinNAT). WebSocket
+        // upgrade for /ws, plain HTTP for /live/* (stats/health/config).
+        '/ws': {
+          target: process.env.LIVE_SERVER_URL ?? 'http://localhost:8090',
+          ws: true,
+          changeOrigin: false,
+        },
+        '/live': {
+          target: process.env.LIVE_SERVER_URL ?? 'http://localhost:8090',
+          changeOrigin: false,
+          rewrite: (p) => p.replace(/^\/live/, ''),
+        },
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

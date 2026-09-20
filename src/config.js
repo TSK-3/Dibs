@@ -10,6 +10,11 @@ export const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 // constrained to. Replace DEFAULT_SCOPES with Surya's list before the demo.
 // Override without touching code:  SCOPES="auth,payments,ml"   (env var)
 //                              or  SCOPES_FILE=./scopes.json  ({"scopes": [...]})
+//
+// Open mode — SCOPES_OPEN=1 — accepts any hierarchical scope that matches
+// OPEN_SCOPE_PATTERN (e.g. "auth" or "auth/login.tsx") IN ADDITION to the
+// enum, and switches conflict detection to segment-aware overlap matching so a
+// file-path claim collides with its parent module. Default stays closed (PRD).
 const DEFAULT_SCOPES = [
   'auth', 'payments', 'database', 'api', 'ui', 'networking',
   'notifications', 'settings', 'infra', 'ml', 'search', 'storage',
@@ -36,6 +41,10 @@ function loadScopes() {
 
 export const SCOPES = loadScopes();
 export const SCOPE_SET = new Set(SCOPES);
+
+// Open/hierarchical scope mode (see the comment above the scope enum).
+export const SCOPES_OPEN = /^(1|true)$/i.test(process.env.SCOPES_OPEN || '');
+export const OPEN_SCOPE_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,63}$/;
 
 export const PORT = Number(process.env.PORT || 8080);
 // 0.0.0.0 so phone clients on venue wifi can reach the server during the demo.

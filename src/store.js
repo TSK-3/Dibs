@@ -38,6 +38,11 @@ export class ClaimStore {
     return out;
   }
 
+  /** Distinct scope names with at least one claim in a team (for overlap scans). */
+  getTeamScopes(teamId) {
+    return [...(this.teams.get(teamId)?.keys() ?? [])];
+  }
+
   claimCount() {
     let n = 0;
     for (const scopes of this.teams.values()) for (const holders of scopes.values()) n += holders.size;
