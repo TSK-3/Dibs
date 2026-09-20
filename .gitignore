@@ -34,3 +34,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# On-device LLM model files - huge, never commit. Download once locally.
+assets/models/*.gguf
