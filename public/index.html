@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Interrupt — client test bench</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background:#0b0f17; color:#e6e9f0; margin:0; padding:16px; max-width:760px; margin-inline:auto; }
+  h1 { font-size:18px; margin:0 0 12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  input, select, button { background:#151b28; border:1px solid #2a3550; color:inherit; border-radius:8px; padding:9px 10px; font-size:14px; }
+  input { min-width:0; }
+  button { cursor:pointer; white-space:nowrap; } button.primary { background:#2563eb; border-color:#2563eb; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #log { margin-top:12px; background:#0e1320; border:1px solid #232a3d; border-radius:10px; padding:10px; height:50vh; overflow:auto; font:12px/1.55 ui-monospace,Consolas,monospace; }
+  .m { margin:2px 0; white-space:pre-wrap; word-break:break-word; }
+  .ack { color:#4ade80; } .interrupt { color:#f87171; font-weight:700; } .state { color:#93c5fd; }
+  .error { color:#fbbf24; } .sent { color:#8b93a7; } .sys { color:#6b7280; }
+  .pill { display:inline-block; padding:3px 10px; border-radius:99px; font-size:11px; border:1px solid #2a3550; color:#9aa4bb; align-self:center; }
+  .pill.on { color:#4ade80; border-color:#14532d; }
+</style>
+</head>
+<body>
+<h1>⚡ Live Interrupt — client test bench</h1>
+<div class="row">
+  <input id="url" style="flex:2 1 180px" value="ws://localhost:8080/ws">
+  <input id="userId" placeholder="user_id (e.g. karthik)" style="flex:1 1 120px">
+  <input id="teamId" placeholder="team_id" value="insomniacs" style="flex:1 1 110px">
+  <input id="token" placeholder="token (if AUTH_TOKEN set)" style="flex:1 1 130px">
+  <button id="connect" class="primary">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <span id="status" class="pill">offline</span>
+</div>
+<div class="row">
+  <select id="scope"></select>
+  <input id="summary" placeholder="summary — what you're doing" style="flex:2 1 180px">
+  <input id="rationale" placeholder="rationale — why" style="flex:2 1 180px">
+</div>
+<div class="row">
+  <button id="post" class="primary" disabled>▶ Post intent</button>
+  <button id="check" disabled>🔍 Check scope</button>
+  <button id="complete" disabled>✓ Complete intent</button>
+  <button id="state" disabled>⟳ Request state</button>
+</div>
+<div id="log"></div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let ws = null;
+  const uid = () => $('userId').value || 'guest-' + Math.floor(Math.random() * 900 + 100);
+
+  function line(cls, text) {
+    const el = document.createElement('div');
+    el.className = 'm ' + cls;
+    el.textContent = text;
+    $('log').appendChild(el);
+    $('log').scrollTop = 1e9;
+  }
+  const sys = (t) => line('sys', '· ' + t);
+  const show = (dir, m) => line(m.type, (dir === 'in' ? '← ' : '→ ') + JSON.stringify(m));
+
+  function setEnabled(on) {
+    for (const id of ['post', 'check', 'complete', 'state']) $(id).disabled = !on;
+    $('disconnect').disabled = !on;
+    $('connect').disabled = on;
+    $('status').textContent = on ? 'connected as ' + $('userId').value : 'offline';
+    $('status').classList.toggle('on', on);
+  }
+
+  function send(obj) {
+    if (ws && ws.readyState === 1) { show('out', obj); ws.send(JSON.stringify(obj)); }
+    else sys('not connected');
+  }
+
+  $('connect').onclick = () => {
+    try {
+      const url = new URL($('url').value);
+      url.searchParams.set('user_id', $('userId').value || uid());
+      url.searchParams.set('team_id', $('teamId').value || 'insomniacs');
+      if ($('token').value) url.searchParams.set('token', $('token').value);
+      sys('connecting → ' + url.toString());
+      ws = new WebSocket(url.toString());
+      ws.onopen = () => { sys('connected — watch for the state welcome below'); setEnabled(true); };
+      ws.onmessage = (e) => { try { show('in', JSON.parse(e.data)); } catch { sys('non-JSON frame: ' + e.data); } };
+      ws.onclose = () => { sys('connection closed'); setEnabled(false); };
+      ws.onerror = () => sys('socket error');
+    } catch (err) { sys('bad url: ' + err.message); }
+  };
+  $('disconnect').onclick = () => ws && ws.close();
+
+  $('post').onclick = () => send({
+    type: 'post_intent', user_id: uid(), scope: $('scope').value,
+    summary: $('summary').value || 'Working on ' + $('scope').value,
+    rationale: $('rationale').value || 'demo run', timestamp: Date.now(),
+  });
+  $('check').onclick = () => send({ type: 'check_intent', user_id: uid(), scope: $('scope').value });
+  $('complete').onclick = () => send({ type: 'complete_intent', user_id: uid(), scope: $('scope').value });
+  $('state').onclick = () => send({ type: 'request_state', user_id: uid() });
+
+  // Scope enum comes from the server so this page always matches the backend.
+  fetch('/config').then((r) => r.json()).then((c) => {
+    $('scope').innerHTML = c.scopes.map((s) => '<option>' + s + '</option>').join('');
+  }).catch(() => {
+    $('scope').innerHTML = ['auth','payments','database','api','ui'].map((s) => '<option>' + s + '</option>').join('');
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "live-interrupt-backend",
+  "version": "1.0.0",
+  "description": "Team Insomniacs — iQOO Hackathon 2026. Live interrupt backend: WebSocket server, scope-overlap matcher, snapshot-persisted in-memory store, and MCP tool wrapper.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "demo": "node scripts/demo.js",
+    "mcp": "node src/mcp/mcp-stdio.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "websocket",
+    "hackathon",
+    "mcp",
+    "realtime",
+    "interrupt"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
