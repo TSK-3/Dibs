@@ -12,3 +12,6 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# llama.rn - keep native bindings in release builds with minification
+-keep class com.rnllama.** { *; }
