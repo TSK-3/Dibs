@@ -2,3 +2,33 @@ node_modules/
 snapshots/
 *.log
 *.tmp
+
+# Expo / React Native app
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+.env*.local
+*.tsbuildinfo
+
+mobile/assets/models/*.gguf
