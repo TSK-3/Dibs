@@ -47,3 +47,6 @@ ios/Pods/
 ios/*.xcodeproj/xcuserdata/
 ios/*.xcworkspace/xcuserdata/
 
+# Vercel CLI local state
+.vercel/
+

@@ -30,6 +30,15 @@ Credentials are required — there is no demo or guest sign-in. Until a provider
 `/api/auth/<provider>/start` fails closed with `<provider>_not_configured`. The
 identity service logs exactly which variables are missing at boot.
 
+## Deploying to Vercel
+
+The console deploys as one Vercel project: the SPA on the edge plus the
+identity service as a serverless function, same-origin `/api/*` just like
+development. Team creation and joining needs durable storage on Vercel
+(free-tier Upstash Redis) — the step-by-step guide with every environment
+variable, the OAuth redirect URIs for a custom domain, and a verification
+checklist is in [`DEPLOY.md`](DEPLOY.md).
+
 ## Wire up real Gmail and GitHub sign-in
 
 1. Copy the template: `cp .env.example .env.local`

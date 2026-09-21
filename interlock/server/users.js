@@ -20,13 +20,21 @@ export function userIdFor(provider, providerId) {
 }
 
 export class UserStore {
-  constructor({ filePath, logger = console, encryptionKey = null } = {}) {
+  constructor({ filePath, logger = console, encryptionKey = null, initialSnapshot = null, remoteSave = null } = {}) {
     this.filePath = filePath;
     this.log = logger;
     // When set, provider access tokens are encrypted at rest (see secretbox).
     this.encryptionKey = encryptionKey;
+    // Durable remote storage (serverless deploys, see server/cloudStore.js):
+    // hydrate from a snapshot at boot and mirror every mutation back.
+    this.remoteSave = remoteSave;
     this.users = new Map(); // user_id → record
-    this.restore();
+    if (initialSnapshot) {
+      const count = this.hydrate(initialSnapshot);
+      this.log.log?.(`[users] restored ${count} identity record(s) from remote storage`);
+    } else {
+      this.restore();
+    }
   }
 
   /** Tokens never touch disk in plaintext when an encryption key is present. */
@@ -117,8 +125,16 @@ export class UserStore {
   }
 
   save() {
+    const snapshot = this.serialize();
+    if (this.remoteSave) {
+      // Fire-and-forget: the in-memory store stays authoritative for this
+      // instance; the mirror keeps other instances and cold starts current.
+      void Promise.resolve()
+        .then(() => this.remoteSave(snapshot))
+        .catch((err) => this.log.error?.(`[users] remote save failed: ${err?.message ?? err}`));
+    }
     if (!this.filePath) return;
-    const data = JSON.stringify(this.serialize(), null, 2);
+    const data = JSON.stringify(snapshot, null, 2);
     try {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       const tmp = `${this.filePath}.${process.pid}.tmp`;
@@ -139,6 +155,18 @@ export class UserStore {
     }
   }
 
+  /** Shared restore path for file snapshots and remote (serverless) snapshots. */
+  hydrate(snapshot) {
+    let count = 0;
+    for (const [id, user] of Object.entries(snapshot?.users ?? {})) {
+      if (user && typeof user === 'object' && user.provider && user.providerId) {
+        this.users.set(id, user);
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   restore() {
     if (!this.filePath || !fs.existsSync(this.filePath)) return;
     let raw;
@@ -150,12 +178,8 @@ export class UserStore {
     }
     try {
       const snapshot = JSON.parse(raw);
-      for (const [id, user] of Object.entries(snapshot?.users ?? {})) {
-        if (user && typeof user === 'object' && user.provider && user.providerId) {
-          this.users.set(id, user);
-        }
-      }
-      this.log.log?.(`[users] restored ${this.users.size} identity record(s) from ${this.filePath}`);
+      const count = this.hydrate(snapshot);
+      this.log.log?.(`[users] restored ${count} identity record(s) from ${this.filePath}`);
     } catch (err) {
       // Never let a corrupt directory brick sign-in — back it up, start empty.
       const corrupt = `${this.filePath}.corrupt-${Date.now()}`;

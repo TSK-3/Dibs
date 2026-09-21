@@ -8,3 +8,6 @@ coverage/
 !.env.example
 # identity service data: generated session secret + user directory
 .data/
+
+# Vercel CLI local state
+.vercel/

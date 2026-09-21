@@ -74,13 +74,19 @@ export class LiveClient {
   }
 
   private url(): string {
-    if (this.options.url) return this.options.url;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const params = new URLSearchParams({
       user_id: this.options.userId,
       team_id: this.options.teamId,
       ...(this.options.client ? { client: this.options.client } : {}),
     });
+    // An explicitly configured URL (VITE_LIVE_WS_URL pointing at an externally
+    // hosted mesh) still gets the identity parameters appended.
+    if (this.options.url) {
+      return this.options.url.includes('?')
+        ? `${this.options.url}&${params.toString()}`
+        : `${this.options.url}?${params.toString()}`;
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${window.location.host}/ws?${params.toString()}`;
   }
 

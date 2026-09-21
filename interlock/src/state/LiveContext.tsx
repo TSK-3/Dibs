@@ -7,6 +7,12 @@ import { AuthUser } from '../lib/authClient';
 import { LiveClient, LiveMessage } from '../live/liveClient';
 import { useWorkspace } from './WorkspaceContext';
 
+// VITE_LIVE_WS_URL — optional absolute ws(s):// URL of an externally hosted
+// live-interrupt backend (Vercel's serverless functions cannot hold WebSocket
+// connections open). Unset, the console connects same-origin at /ws, which the
+// Vite dev proxy forwards to the local backend exactly as before.
+const LIVE_WS_URL: string | undefined = String(import.meta.env.VITE_LIVE_WS_URL ?? '').trim() || undefined;
+
 export interface LiveAgent {
   user_id: string;
   team_id: string;
@@ -122,7 +128,7 @@ export const LiveProvider: React.FC<{ user: AuthUser; children: React.ReactNode 
     }
 
     setStatus('connecting');
-    const client = new LiveClient({ userId, teamId: activeWorkspace.id, client: 'web-console' });
+    const client = new LiveClient({ userId, teamId: activeWorkspace.id, client: 'web-console', url: LIVE_WS_URL });
     clientRef.current = client;
 
     const unsubs = [
