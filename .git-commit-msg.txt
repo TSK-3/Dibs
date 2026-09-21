@@ -1,0 +1,9 @@
+Prepare Vercel deployment
+
+- api/index.js: serverless entry for the identity service (same Express app as server/index.js)
+- server/cloudStore.js: optional Upstash Redis REST persistence so team create/join works across serverless instances and survives cold starts
+- users.js/workspaces.js: optional initialSnapshot + remoteSave hooks (local file behavior unchanged)
+- vercel.json + .vercelignore: SPA + /api rewrites
+- VITE_LIVE_WS_URL: point the live mesh at an externally hosted WebSocket backend
+- DEPLOY.md: Vercel + custom-domain guide; README/env.example updated
+- tests: cross-instance team create/join coverage; npm run smoke verifies the API entry
