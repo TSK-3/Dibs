@@ -173,10 +173,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ onNavigate }) => {
   }
 
   const loading = status === 'loading';
-  // Only providers the server can actually complete render as buttons; the rest
-  // surface as an actionable setup note instead of dead UI.
+  // Only providers the server can actually complete render as buttons.
   const ready = providers.filter((p) => p.configured);
-  const pending = providers.filter((p) => !p.configured);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full flex items-center justify-center p-6">
@@ -192,8 +190,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onNavigate }) => {
             </div>
             <h1 className="text-2xl text-white font-semibold tracking-tight mt-2">Sign in to Interlock</h1>
             <p className="text-xs text-[#c4c7c8] max-w-xs leading-relaxed">
-              Use your Gmail or GitHub account. Only the profile fields needed to identify you in a shared workspace
-              are read.
+              Sign in with GitHub to create or join a team workspace.
             </p>
           </div>
 
@@ -224,48 +221,38 @@ export const AuthView: React.FC<AuthViewProps> = ({ onNavigate }) => {
               </Banner>
             ) : null}
 
-            {ready.map((provider) => {
-              const busy = busyProvider === provider.id;
-              const disabled = !provider.configured || busyProvider !== null || loading;
-              const isGoogle = provider.id === 'google';
+            {(() => {
+              const github = ready.find((provider) => provider.id === 'github');
+              const google = ready.find((provider) => provider.id === 'google');
+              const busy = busyProvider !== null;
               return (
-                <button
-                  key={provider.id}
-                  type="button"
-                  onClick={() => signIn(provider.id)}
-                  disabled={disabled}
-                  title={provider.configured ? undefined : `Set ${provider.setupEnv.join(' + ')}`}
-                  className={`w-full h-12 px-4 rounded-xl text-sm font-semibold flex items-center justify-center gap-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default ${
-                    isGoogle
-                      ? 'bg-white text-[#121315] hover:bg-[#e9e9e9] shadow-sm'
-                      : 'bg-[#1b1c1d] border border-[#444748]/40 text-white hover:border-[#8e9192]'
-                  }`}
-                >
-                  <ProviderMark id={provider.id} />
-                  <span className="flex flex-col items-start leading-tight">
-                    <span>
-                      {busy
-                        ? `Opening ${provider.label}…`
-                        : provider.configured
-                          ? `Continue with ${provider.label}`
-                          : `${provider.label} sign-in unavailable`}
-                    </span>
-                    <span
-                      className={`font-mono text-[10px] font-normal ${isGoogle ? 'text-[#5f6368]' : 'text-[#8e9192]'}`}
+                <>
+                  {google ? (
+                    <button
+                      type="button"
+                      onClick={() => signIn('google')}
+                      disabled={busy || loading}
+                      className="w-full h-12 px-4 rounded-xl bg-white border border-[#444748]/30 text-[#121315] hover:bg-[#f0f0f0] text-sm font-semibold flex items-center justify-center gap-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
                     >
-                      {provider.configured ? provider.accountLabel : `set ${provider.setupEnv.join(' + ')}`}
-                    </span>
-                  </span>
-                </button>
+                      <GoogleMark />
+                      {busyProvider === 'google' ? 'Signing in…' : 'Sign in with Google'}
+                    </button>
+                  ) : null}
+                  {github ? (
+                    <button
+                      type="button"
+                      onClick={() => signIn('github')}
+                      disabled={busy || loading}
+                      className="w-full h-12 px-4 rounded-xl bg-[#1b1c1d] border border-[#444748]/40 text-white hover:border-[#8e9192] text-sm font-semibold flex items-center justify-center gap-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
+                    >
+                      <GitHubMark />
+                      {busyProvider === 'github' ? 'Signing in…' : 'Sign in with GitHub'}
+                    </button>
+                  ) : null}
+                </>
               );
-            })}
+            })()}
 
-            {ready.length > 0 && pending.length > 0 ? (
-              <p className="font-mono text-[10px] text-[#8e9192] leading-relaxed">
-                Available after setup:
-                {pending.map((p) => ` ${p.label.toUpperCase()} — set ${p.setupEnv.join(' + ')}`).join(' · ')}
-              </p>
-            ) : null}
           </div>
 
           <div className="flex flex-col gap-1.5 border-t border-[#444748]/20 pt-4">
@@ -283,5 +270,3 @@ export const AuthView: React.FC<AuthViewProps> = ({ onNavigate }) => {
     </div>
   );
 };
-
-

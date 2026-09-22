@@ -37,6 +37,20 @@ export interface LiveStats {
 
 export type LiveStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
+/**
+ * The product moment (PRD §2: "their phone buzzes right now"). On the web the
+ * buzz is an unmissable overlay + a browser notification. Shape mirrors the
+ * backend's interruptForHolder/interruptForPoster contract.
+ */
+export interface LiveInterrupt {
+  id: string;
+  from_user: string;
+  scope: string;
+  summary: string;
+  message: string;
+  at: number;
+}
+
 export interface WireTraceEntry {
   id: string;
   at: string;
@@ -52,6 +66,9 @@ export interface LiveContextValue {
   claims: LiveClaim[];
   trace: WireTraceEntry[];
   stats: LiveStats | null;
+  /** Most recent un-dismissed interrupt — rendered as the full-screen alert. */
+  interrupt: LiveInterrupt | null;
+  dismissInterrupt: () => void;
   claim: (scope: string, summary: string, rationale?: string) => void;
   release: (scope: string) => void;
   check: (scope: string) => void;
@@ -90,6 +107,7 @@ export const LiveProvider: React.FC<{ user: AuthUser; children: React.ReactNode 
   const [claims, setClaims] = useState<LiveClaim[]>([]);
   const [trace, setTrace] = useState<WireTraceEntry[]>([]);
   const [stats, setStats] = useState<LiveStats | null>(null);
+  const [interrupt, setInterrupt] = useState<LiveInterrupt | null>(null);
 
   const userId = useMemo(() => sanitizeLiveUserId(user), [user]);
 
@@ -130,6 +148,7 @@ export const LiveProvider: React.FC<{ user: AuthUser; children: React.ReactNode 
     setStatus('connecting');
     const client = new LiveClient({ userId, teamId: activeWorkspace.id, client: 'web-console', url: LIVE_WS_URL });
     clientRef.current = client;
+    setInterrupt(null);
 
     const unsubs = [
       client.on('open', () => setStatus('online')),
@@ -139,6 +158,31 @@ export const LiveProvider: React.FC<{ user: AuthUser; children: React.ReactNode 
       client.on('state', (msg: any) => {
         setClaims(Array.isArray(msg?.team_claims) ? msg.team_claims : []);
         if (Array.isArray(msg?.agents)) setRoster(msg.agents);
+      }),
+      // THE product moment (PRD §2): a scope collision lands on a person right
+      // now. Full-screen alert + a browser notification so it reaches the user
+      // even when this tab is in the background — the web equivalent of the
+      // phone buzz.
+      client.on('interrupt', (msg: any) => {
+        const entry: LiveInterrupt = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          from_user: String(msg?.from_user ?? 'a teammate'),
+          scope: String(msg?.scope ?? ''),
+          summary: String(msg?.summary ?? ''),
+          message: String(msg?.message ?? 'An overlapping claim just landed'),
+          at: Date.now(),
+        };
+        setInterrupt(entry);
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification('⚠ Interlock — scope collision', {
+              body: entry.message,
+              tag: `interlock-interrupt-${entry.scope}`,
+            });
+          }
+        } catch {
+          /* notifications are best-effort; the overlay always shows */
+        }
       }),
       client.on('ack', () => client.send({ type: 'request_state' })),
       client.on('complete_ack', () => client.send({ type: 'request_state' })),
@@ -188,9 +232,11 @@ export const LiveProvider: React.FC<{ user: AuthUser; children: React.ReactNode 
     [userId],
   );
 
+  const dismissInterrupt = useCallback(() => setInterrupt(null), []);
+
   const value = useMemo<LiveContextValue>(
-    () => ({ userId, status, roster, claims, trace, stats, claim, release, check, refreshStats }),
-    [userId, status, roster, claims, trace, stats, claim, release, check, refreshStats],
+    () => ({ userId, status, roster, claims, trace, stats, interrupt, dismissInterrupt, claim, release, check, refreshStats }),
+    [userId, status, roster, claims, trace, stats, interrupt, dismissInterrupt, claim, release, check, refreshStats],
   );
 
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>;

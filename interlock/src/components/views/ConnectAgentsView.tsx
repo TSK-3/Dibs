@@ -65,7 +65,7 @@ export const ConnectAgentsView: React.FC<ConnectAgentsViewProps> = ({ onNavigate
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
           <span className="px-2.5 py-1 bg-[#292a2b] rounded text-white font-mono text-xs uppercase tracking-wider">
-            Step 2 of 3
+            Step 2 of 4
           </span>
           <span className="font-mono text-xs text-[#8e9192] uppercase tracking-wider">Agent Fleet Integration</span>
         </div>

@@ -127,7 +127,7 @@ export const PairAgentView: React.FC<PairAgentViewProps> = ({ onNavigate }) => {
     <div className="w-full px-6 lg:px-12 py-10 max-w-6xl mx-auto flex flex-col gap-8">
       {/* HEADER */}
       <div className="flex flex-col gap-2">
-        <span className="font-mono text-xs text-[#8e9192] uppercase tracking-wider">Step 03 · Agent Pairing</span>
+        <span className="font-mono text-xs text-[#8e9192] uppercase tracking-wider">Step 3 of 4 · Agent Pairing</span>
         <h1 className="text-3xl text-white font-semibold tracking-tight">Pair Your Coding Agent</h1>
         <p className="text-sm text-[#c4c7c8] max-w-2xl leading-relaxed">
           Connect the AI agent you actually work with — Cursor, Claude Code, any MCP client — to{' '}

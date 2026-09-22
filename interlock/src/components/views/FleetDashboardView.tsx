@@ -1,9 +1,8 @@
 // src/components/views/FleetDashboardView.tsx — Step 3: the live control room.
-// Every number, claim, and trace row here comes from the WebSocket backend:
-// claims via request_state/interrupts, agent counts via presence, and global
-// counters via the backend's /stats metrics endpoint.
-import React, { useMemo, useState } from 'react';
-import { useLive, LiveClaim } from '../../state/LiveContext';
+// Live values come from the WebSocket backend. When a workspace has no live
+// traffic yet, clearly labeled demo values keep the dashboard useful for demos.
+import React, { useEffect, useMemo, useState } from 'react';
+import { useLive, LiveClaim, WireTraceEntry } from '../../state/LiveContext';
 import { useWorkspace } from '../../state/WorkspaceContext';
 
 interface FleetDashboardViewProps {
@@ -23,15 +22,70 @@ const counter = (stats: ReturnType<typeof useLive>['stats'], name: string): numb
   return typeof value === 'number' ? value : 0;
 };
 
+/**
+ * Re-render once per second so the "Held" durations in the scope matrix count
+ * up live (and the demo feels alive). Pauses when the tab is hidden.
+ */
+const useClockTick = (enabled: boolean): number => {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') setTick((t) => t + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [enabled]);
+  return tick;
+};
+
 export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
-  const { status, roster, claims, trace, stats, claim, release, check, userId } = useLive();
+  const { status, roster, claims, trace, stats, claim, release, check, userId, interrupt, dismissInterrupt } = useLive();
   const { activeWorkspace } = useWorkspace();
   const [filter, setFilter] = useState<'all' | 'mine'>('all');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showClaimModal, setShowClaimModal] = useState(false);
+  const [notifyState, setNotifyState] = useState<string>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
+  );
   const [newScope, setNewScope] = useState('auth');
   const [newSummary, setNewSummary] = useState('');
   const [newRationale, setNewRationale] = useState('');
+  const demoRoster = [
+    { user_id: 'demo-alex', team_id: activeWorkspace?.id ?? 'demo', connected_at: Date.now() - 180000, client: 'web-console' },
+    { user_id: 'demo-sam', team_id: activeWorkspace?.id ?? 'demo', connected_at: Date.now() - 92000, client: 'cli-agent' },
+  ];
+  const demoClaims: LiveClaim[] = [
+    {
+      scope: 'auth/session.ts',
+      user_id: 'demo-alex',
+      summary: 'Refresh session rotation',
+      rationale: 'Keep token refresh changes isolated.',
+      timestamp: Date.now() - 420000,
+      received_at: Date.now() - 420000,
+    },
+    {
+      scope: 'workspace/members',
+      user_id: 'demo-sam',
+      summary: 'Add member presence sync',
+      rationale: 'Show joins immediately to the owner.',
+      timestamp: Date.now() - 155000,
+      received_at: Date.now() - 155000,
+    },
+  ];
+  const demoTrace: WireTraceEntry[] = [
+    { id: 'demo-1', at: '12:04:18.204', type: 'roster', severity: 'info' as const, payload: { user_id: 'demo-sam', status: 'connected' } },
+    { id: 'demo-2', at: '12:03:51.882', type: 'ack', severity: 'info' as const, payload: { scope: 'workspace/members' } },
+    { id: 'demo-3', at: '12:02:09.417', type: 'scope_status', severity: 'warn' as const, payload: { scope: 'auth/session.ts', available: true } },
+  ];
+  const tick = useClockTick(claims.length > 0); // eslint-disable-line @typescript-eslint/no-unused-vars
+  void tick;
+  const showingDemoData = roster.length === 0 && claims.length === 0 && trace.length === 0;
+  const displayRoster = showingDemoData ? demoRoster : roster;
+  const displayClaims = showingDemoData ? demoClaims : claims;
+  const displayTrace = showingDemoData ? demoTrace : trace;
+  const displayStats = showingDemoData
+    ? { uptime_ms: 420000, counters: { conflicts_detected_total: 2, interrupts_sent_total: 7 }, gauges: {} }
+    : stats;
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
@@ -39,14 +93,14 @@ export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
   };
 
   const visibleClaims = useMemo(
-    () => (filter === 'mine' ? claims.filter((c) => c.user_id === userId) : claims),
-    [claims, filter, userId],
+    () => (filter === 'mine' ? displayClaims.filter((c) => c.user_id === userId) : displayClaims),
+    [displayClaims, filter, userId],
   );
 
   // Group claims by scope so a scope held by multiple agents reads as SHARED.
   const matrixRows = useMemo(() => {
     const byScope = new Map<string, LiveClaim[]>();
-    for (const c of claims) {
+    for (const c of displayClaims) {
       const list = byScope.get(c.scope) ?? [];
       list.push(c);
       byScope.set(c.scope, list);
@@ -56,13 +110,13 @@ export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
       holders,
       lockType: holders.length > 1 ? 'SHARED' : 'EXCLUSIVE',
     }));
-  }, [claims]);
+  }, [displayClaims]);
 
   const statsCards = [
-    { label: 'Agents Online', value: String(roster.length), suffix: status === 'online' ? 'live mesh' : status },
-    { label: 'Active Claims', value: String(claims.length), suffix: 'held scopes' },
-    { label: 'Conflicts Detected', value: String(counter(stats, 'conflicts_detected_total')), suffix: 'collisions' },
-    { label: 'Interrupts Sent', value: String(counter(stats, 'interrupts_sent_total')), suffix: 'real-time pings' },
+    { label: 'Agents Online', value: String(displayRoster.length), suffix: showingDemoData ? 'demo' : status === 'online' ? 'live mesh' : status },
+    { label: 'Active Claims', value: String(displayClaims.length), suffix: showingDemoData ? 'demo scopes' : 'held scopes' },
+    { label: 'Conflicts Detected', value: String(counter(displayStats, 'conflicts_detected_total')), suffix: showingDemoData ? 'demo' : 'collisions' },
+    { label: 'Interrupts Sent', value: String(counter(displayStats, 'interrupts_sent_total')), suffix: showingDemoData ? 'demo' : 'real-time pings' },
   ];
 
   const handleBroadcast = () => {
@@ -86,18 +140,49 @@ export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
         </div>
       )}
 
+      {/* THE interrupt moment (PRD §2/§3.3): an overlapping claim just landed on
+          this user. Full-screen, unmissable — the web equivalent of the phone
+          buzz. Dismiss to acknowledge. */}
+      {interrupt && (
+        <div className="fixed inset-0 z-[60] bg-[#93000a]/95 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="w-full max-w-lg bg-[#171819] border-2 border-[#ffdad6] rounded-3xl p-8 shadow-2xl flex flex-col gap-5 text-center animate-pulse">
+            <div className="mx-auto w-16 h-16 rounded-full bg-[#93000a] flex items-center justify-center">
+              <span className="material-symbols-outlined text-[#ffdad6] text-[36px]">notification_important</span>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <span className="font-mono text-xs text-[#ffb4ab] uppercase tracking-widest">Scope collision — act now</span>
+              <h2 className="text-2xl text-white font-semibold leading-snug">
+                {interrupt.from_user} is already working on{' '}
+                <span className="font-mono text-[#ffdad6]">{interrupt.scope}</span>
+              </h2>
+              <p className="text-sm text-[#c4c7c8] leading-relaxed">{interrupt.message}</p>
+              {interrupt.summary ? (
+                <p className="text-xs text-[#8e9192] font-mono mt-1 break-words">“{interrupt.summary}”</p>
+              ) : null}
+            </div>
+            <button
+              onClick={dismissInterrupt}
+              autoFocus
+              className="mt-2 w-full py-4 bg-white text-[#121315] font-semibold text-sm rounded-xl hover:bg-[#e2e2e2] transition-colors cursor-pointer shadow-lg"
+            >
+              Got it — I'll pick different work
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header & controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
             <span className="font-mono text-xs text-[#8e9192] uppercase tracking-wider">
-              Step 3 of 3 · Live Monitoring — {activeWorkspace?.name ?? ''}
+              Step 4 of 4 · Live Monitoring — {activeWorkspace?.name ?? ''}
             </span>
           </div>
           <h1 className="text-3xl sm:text-4xl text-white font-semibold tracking-tight">Fleet Dashboard</h1>
           <p className="text-sm text-[#c4c7c8] mt-1">
-            Real claims, real collisions, real interrupts — straight from the WebSocket backend.
+            {showingDemoData ? 'Demo data is shown until live agents connect.' : 'Real claims, real collisions, real interrupts — straight from the WebSocket backend.'}
           </p>
         </div>
 
@@ -107,13 +192,33 @@ export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
             onChange={(e) => setFilter(e.target.value as 'all' | 'mine')}
             className="bg-[#171819] border border-[#444748]/30 text-white font-mono text-xs px-3 py-2.5 rounded-xl focus:outline-none cursor-pointer"
           >
-            <option value="all">All claims ({claims.length})</option>
+            <option value="all">All claims ({displayClaims.length})</option>
             <option value="mine">My claims</option>
           </select>
+
+          {notifyState === 'default' && status === 'online' ? (
+            <button
+              onClick={async () => {
+                try {
+                  const result = await Notification.requestPermission();
+                  setNotifyState(result);
+                  if (result === 'granted') triggerToast('Interrupts will now reach you even in a background tab.');
+                } catch {
+                  /* denied or unsupported — the in-app overlay still fires */
+                }
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#292a2b] text-[#c4c7c8] hover:text-white text-xs font-mono rounded-xl border border-[#444748]/40 hover:border-[#8e9192] transition-colors cursor-pointer"
+              title="Browser notifications land even when this tab is in the background"
+            >
+              <span className="material-symbols-outlined text-[16px]">notifications_active</span>
+              <span>Enable interrupt pings</span>
+            </button>
+          ) : null}
 
           <button
             onClick={() => setShowClaimModal(true)}
             disabled={status !== 'online'}
+            title={status !== 'online' ? 'Waiting for a live mesh connection (is the live backend running?)' : 'Post a real intent on the mesh'}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-white text-[#121315] font-semibold text-xs font-mono rounded-xl hover:bg-[#e2e2e2] transition-colors cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined text-[16px]">add</span>
@@ -218,13 +323,13 @@ export const FleetDashboardView: React.FC<FleetDashboardViewProps> = () => {
       <div className="p-6 bg-[#0d0e0f] border border-[#444748]/25 rounded-2xl flex flex-col gap-3 shadow-sm">
         <div className="flex items-center justify-between pb-2 border-b border-[#444748]/20">
           <h2 className="text-base font-semibold text-white">Wire Trace</h2>
-          <span className="font-mono text-[10px] text-[#8e9192]">newest first · {trace.length} event(s)</span>
+          <span className="font-mono text-[10px] text-[#8e9192]">newest first · {displayTrace.length} event(s)</span>
         </div>
         <div className="flex flex-col max-h-80 overflow-y-auto">
-          {trace.length === 0 ? (
+          {displayTrace.length === 0 ? (
             <span className="py-4 text-center font-mono text-xs text-[#8e9192]">No traffic yet.</span>
           ) : (
-            trace.map((entry) => (
+            displayTrace.map((entry) => (
               <div key={entry.id} className="flex items-start gap-3 py-1.5 font-mono text-[11px]">
                 <span className="text-[#8e9192] shrink-0">{entry.at}</span>
                 <span
