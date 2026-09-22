@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { AuthView } from './components/views/AuthView';
 import { TeamWorkspaceView } from './components/views/TeamWorkspaceView';
 import { ConnectAgentsView } from './components/views/ConnectAgentsView';
+import { PairAgentView } from './components/views/PairAgentView';
 import { FleetDashboardView } from './components/views/FleetDashboardView';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { WorkspaceProvider, useWorkspace } from './state/WorkspaceContext';
@@ -47,6 +48,13 @@ const WorkspaceShell: React.FC = () => {
           {currentPath === 'connect-agents' &&
             (activeWorkspace ? (
               <ConnectAgentsView onNavigate={setCurrentPath} />
+            ) : (
+              <WorkspaceRequired onNavigate={setCurrentPath} />
+            ))}
+
+          {currentPath === 'pair-agent' &&
+            (activeWorkspace ? (
+              <PairAgentView onNavigate={setCurrentPath} />
             ) : (
               <WorkspaceRequired onNavigate={setCurrentPath} />
             ))}

@@ -23,6 +23,8 @@ import { createSessionCodec, serializeCookie, clearCookie, parseCookies } from '
 import { PROVIDERS, ProviderError, describeProviders, getProvider, maskToken } from './providers.js';
 import { listRepos } from './github.js';
 import { WorkspaceStore, publicWorkspace, validateWorkspaceInput } from './workspaces.js';
+import { PairingStore } from './pairing.js';
+import { createBackendRelay, createMcpRouter, createPairingGuard } from './mcp.js';
 import {
   buildAuthorizeUrl,
   buildRedirectUri,
@@ -103,6 +105,11 @@ export function createApp(options = {}) {
   const workspaces = options.workspaces ?? new WorkspaceStore({
     filePath: config.workspacesFile ?? path.join(config.dataDir ?? DEFAULT_DATA_DIR, 'workspaces.json'),
     logger,
+  });
+  const pairings = options.pairings ?? new PairingStore({
+    filePath: config.pairingFile ?? path.join(config.dataDir ?? DEFAULT_DATA_DIR, 'pairing.json'),
+    logger,
+    encryptionKey: sessionSecret,
   });
   const sessionCodec = options.sessionCodec ??
     createSessionCodec({ secret: sessionSecret, ttlMs: config.sessionTtlMs });
@@ -355,6 +362,9 @@ export function createApp(options = {}) {
       const user = users.upsertFromProfile(profile, {
         providerToken: { accessToken: token.accessToken, scope: token.scope, tokenType: token.tokenType },
       });
+      // Vercel may freeze a function as soon as the response is sent. Do not
+      // acknowledge a login until the identity/token snapshot is durable.
+      await users.waitForPersistence?.();
       return issueSession(res, user, { returnTo: pending.returnTo });
     } catch (err) {
       return handleCallbackFailure(res, err, provider, pending.returnTo);
@@ -390,7 +400,7 @@ export function createApp(options = {}) {
   });
 
   // ── Workspaces: create / list / join / inspect / rotate code / delete ────
-  api.post('/workspaces', requireSession, rateLimited, (req, res) => {
+  api.post('/workspaces', requireSession, rateLimited, async (req, res) => {
     const validation = validateWorkspaceInput(req.body ?? {});
     if (!validation.ok) {
       return res.status(400).json({ ok: false, error: 'validation_error', detail: validation.detail });
@@ -400,6 +410,7 @@ export function createApp(options = {}) {
       name: validation.name,
       repo: validation.repo,
     });
+    await workspaces.waitForPersistence?.();
     logger.info(
       `[workspaces] ${workspace.id} "${workspace.name}" created by ${req.authUser.id} (repo=${workspace.repo.fullName})`,
     );
@@ -411,7 +422,7 @@ export function createApp(options = {}) {
     return res.json({ ok: true, workspaces: workspaces.listForUser(req.authUser.id).map(publicWorkspace) });
   });
 
-  api.post('/workspaces/join', requireSession, rateLimited, (req, res) => {
+  api.post('/workspaces/join', requireSession, rateLimited, async (req, res) => {
     const code = typeof req.body?.code === 'string' ? req.body.code.replace(/\D/g, '') : '';
     if (code.length !== 6) {
       return res.status(400).json({ ok: false, error: 'validation_error', detail: 'code must be exactly 6 digits' });
@@ -421,6 +432,7 @@ export function createApp(options = {}) {
       logger.warn(`[workspaces] join failed for ${req.authUser.id}: ${result.error}`);
       return res.status(result.error === 'invalid_code' ? 404 : 400).json({ ok: false, error: result.error });
     }
+    await workspaces.waitForPersistence?.();
     logger.info(`[workspaces] ${result.workspace.id} joined by ${req.authUser.id}`);
     return res.json({ ok: true, workspace: publicWorkspace(result.workspace) });
   });
@@ -433,29 +445,89 @@ export function createApp(options = {}) {
     return res.json({ ok: true, workspace: publicWorkspace(record) });
   });
 
-  api.post('/workspaces/:id/invite/regenerate', requireSession, rateLimited, (req, res) => {
+  api.post('/workspaces/:id/invite/regenerate', requireSession, rateLimited, async (req, res) => {
     const result = workspaces.regenerateCode(req.params.id, req.authUser.id);
     if (!result.ok) {
       const status = result.error === 'not_found' ? 404 : result.error === 'forbidden' ? 403 : 400;
       return res.status(status).json({ ok: false, error: result.error });
     }
+    await workspaces.waitForPersistence?.();
     logger.info(`[workspaces] ${req.params.id} invite code rotated by ${req.authUser.id}`);
     return res.json({ ok: true, inviteCode: result.inviteCode });
   });
 
-  api.delete('/workspaces/:id', requireSession, (req, res) => {
+  api.delete('/workspaces/:id', requireSession, async (req, res) => {
     const result = workspaces.remove(req.params.id, req.authUser.id);
     if (!result.ok) {
       const status = result.error === 'not_found' ? 404 : result.error === 'forbidden' ? 403 : 400;
       return res.status(status).json({ ok: false, error: result.error });
     }
+    await workspaces.waitForPersistence?.();
     logger.info(`[workspaces] ${req.params.id} deleted by ${req.authUser.id}`);
     return res.json({ ok: true });
+  });
+
+  // ── Agent pairing: the token that lets a coding agent act as this user ───
+  // GET issues the token on first visit, then re-displays it. The plaintext is
+  // only ever served over an authenticated session — the MCP side receives it
+  // as a Bearer credential pasted into the agent's config.
+  const pairingPayload = (workspace, token, meta) => ({
+    ok: true,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    token,
+    mcpUrl: config.mcpPublicUrl,
+    // The exact block the user pastes into their agent's MCP config — the token
+    // is the auth, so no login ever happens inside the agent.
+    config: {
+      mcpServers: {
+        interlock: {
+          url: config.mcpPublicUrl,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      },
+    },
+    meta,
+  });
+
+  api.get('/workspaces/:id/pairing', requireSession, async (req, res) => {
+    const workspace = workspaces.get(req.params.id);
+    if (!workspace || !workspaces.isMember(workspace, req.authUser.id)) {
+      return res.status(404).json({ ok: false, error: 'not_found' });
+    }
+    let token = pairings.reveal(req.authUser.id, workspace.id);
+    if (!token) {
+      ({ token } = pairings.issue(req.authUser.id, workspace.id));
+      await pairings.waitForPersistence?.();
+      logger.info(`[pairing] token issued for ${req.authUser.id}@${workspace.id}`);
+    }
+    return res.json(pairingPayload(workspace, token, pairings.describe(req.authUser.id, workspace.id)));
+  });
+
+  api.post('/workspaces/:id/pairing/regenerate', requireSession, rateLimited, async (req, res) => {
+    const workspace = workspaces.get(req.params.id);
+    if (!workspace || !workspaces.isMember(workspace, req.authUser.id)) {
+      return res.status(404).json({ ok: false, error: 'not_found' });
+    }
+    const { token, rotatedAt } = pairings.rotate(req.authUser.id, workspace.id);
+    await pairings.waitForPersistence?.();
+    // The old token is deleted in the same mutation — anything already pasted
+    // with it stops resolving on the very next MCP call.
+    logger.info(`[pairing] token regenerated for ${req.authUser.id}@${workspace.id} (previous token invalidated)`);
+    return res.json(pairingPayload(workspace, token, { createdAt: rotatedAt, rotatedAt, lastUsedAt: null }));
   });
 
   // Every /api miss is JSON — never the SPA shell.
   api.use((req, res) => res.status(404).json({ ok: false, error: 'not_found', path: req.path }));
   app.use('/api', api);
+
+  // ── MCP endpoint for paired coding agents (Bearer pairing token) ─────────
+  // Mounted at app level (not /api) because agents POST here directly, with the
+  // token resolving to a {user_id, team_id} pair from the same stores above.
+  const mcpGuard = createPairingGuard({ pairings, users, workspaces, logger });
+  const mcpRelay = options.mcpRelay ??
+    createBackendRelay({ backendUrl: config.wsBackendUrl, timeoutMs: config.mcpTimeoutMs, logger });
+  app.use('/mcp', createMcpRouter({ guard: mcpGuard, relay: mcpRelay, logger }));
 
   // ── single-process deploy shape: serve the built SPA from here too ────────
   if (config.serveStatic && fs.existsSync(DIST_DIR)) {
@@ -475,7 +547,8 @@ export function createApp(options = {}) {
   app.locals.config = config;
   app.locals.users = users;
   app.locals.sessionCodec = sessionCodec;
+  app.locals.workspaces = workspaces;
+  app.locals.pairings = pairings;
   app.locals.logger = logger;
   return app;
 }
-

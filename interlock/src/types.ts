@@ -1,6 +1,7 @@
 export type NavigationPath = 
   | 'team-workspace'
   | 'connect-agents'
+  | 'pair-agent'
   | 'agent-fleet-dashboard'
   | 'auth';
 

@@ -18,8 +18,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const menuItems = [
     { id: 'team-workspace' as NavigationPath, label: 'Team & Workspace', icon: 'group', step: '01' },
     { id: 'connect-agents' as NavigationPath, label: 'Connect Agents', icon: 'hub', step: '02' },
-    { id: 'agent-fleet-dashboard' as NavigationPath, label: 'Fleet Dashboard', icon: 'grid_view', step: '03' },
-    { id: 'auth' as NavigationPath, label: 'Login', icon: 'lock', step: '04' },
+    { id: 'pair-agent' as NavigationPath, label: 'Pair Your Agent', icon: 'key', step: '03' },
+    { id: 'agent-fleet-dashboard' as NavigationPath, label: 'Fleet Dashboard', icon: 'grid_view', step: '04' },
+    { id: 'auth' as NavigationPath, label: 'Login', icon: 'lock', step: '05' },
   ];
 
   return (

@@ -25,7 +25,9 @@ const { loadConfig, resolveSessionSecret } = await import('../server/config.js')
 const { createLogger } = await import('../server/logger.js');
 const { UserStore } = await import('../server/users.js');
 const { WorkspaceStore } = await import('../server/workspaces.js');
+const { PairingStore } = await import('../server/pairing.js');
 const { cloudBackendFromEnv } = await import('../server/cloudStore.js');
+const { postgresBackendFromEnv } = await import('../server/postgresStore.js');
 
 // One boot per instance; a warm function reuses the app across invocations.
 let cachedApp = null;
@@ -50,12 +52,13 @@ async function getApp() {
 
   const options = { config, logger, sessionSecret };
 
-  const cloud = cloudBackendFromEnv(process.env, { logger });
+  const cloud = postgresBackendFromEnv(process.env, { logger }) ?? cloudBackendFromEnv(process.env, { logger });
   if (cloud) {
-    logger.log(`[auth] durable storage: ${cloud.kind} — preloading users + workspaces`);
-    const [usersSnapshot, workspacesSnapshot] = await Promise.all([
+    logger.log(`[auth] durable storage: ${cloud.kind} — preloading users + workspaces + pairings`);
+    const [usersSnapshot, workspacesSnapshot, pairingsSnapshot] = await Promise.all([
       cloud.load('users'),
       cloud.load('workspaces'),
+      cloud.load('pairings'),
     ]);
     options.users = new UserStore({
       logger,
@@ -67,6 +70,15 @@ async function getApp() {
       logger,
       initialSnapshot: workspacesSnapshot,
       remoteSave: (snapshot) => cloud.save('workspaces', snapshot),
+    });
+    // Pairing tokens are sealed with the session-secret-derived key, so the
+    // snapshot only makes sense on an instance holding the same secret —
+    // exactly like the sealed provider tokens inside the user directory.
+    options.pairings = new PairingStore({
+      logger,
+      encryptionKey: sessionSecret,
+      initialSnapshot: pairingsSnapshot,
+      remoteSave: (snapshot) => cloud.save('pairings', snapshot),
     });
   } else if (config.production) {
     logger.warn(

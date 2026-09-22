@@ -7,6 +7,9 @@ import path from 'node:path';
 import { DEFAULT_DATA_DIR } from './paths.js';
 
 const trimSlashes = (url) => String(url).replace(/\/+$/, '');
+const vercelUrl = process.env.VERCEL_URL
+  ? `https://${String(process.env.VERCEL_URL).replace(/^https?:\/\//, '')}`
+  : '';
 
 export const NODE_ENV = process.env.NODE_ENV || 'development';
 export const IS_PRODUCTION = NODE_ENV === 'production';
@@ -19,15 +22,35 @@ export const HOST = process.env.AUTH_HOST || '0.0.0.0';
 // Public base URL of THIS service — used to build the provider `redirect_uri`
 // that must be registered with Google / GitHub, e.g.
 //   http://localhost:8787/api/auth/google/callback
-export const PUBLIC_URL = trimSlashes(process.env.AUTH_PUBLIC_URL || `http://localhost:${PORT}`);
+export const PUBLIC_URL = trimSlashes(
+  process.env.AUTH_PUBLIC_URL || vercelUrl || `http://localhost:${PORT}`,
+);
 
 // Where the browser lands after the OAuth round-trip: the Vite app.
-export const CLIENT_URL = trimSlashes(process.env.APP_URL || process.env.CLIENT_URL || 'http://localhost:3000');
+export const CLIENT_URL = trimSlashes(
+  process.env.APP_URL || process.env.CLIENT_URL || vercelUrl || 'http://localhost:3000',
+);
 
 export const DATA_DIR = process.env.AUTH_DATA_DIR || DEFAULT_DATA_DIR;
 export const USERS_FILE = process.env.AUTH_USERS_FILE || path.join(DATA_DIR, 'users.json');
 export const SESSION_SECRET_FILE = process.env.AUTH_SESSION_SECRET_FILE || path.join(DATA_DIR, 'session-secret');
 export const WORKSPACES_FILE = process.env.AUTH_WORKSPACES_FILE || path.join(DATA_DIR, 'workspaces.json');
+export const PAIRING_FILE = process.env.AUTH_PAIRING_FILE || path.join(DATA_DIR, 'pairing.json');
+
+// ── Agent pairing / MCP ─────────────────────────────────────────────────────
+// The MCP endpoint relays every tool call to the live-interrupt WS backend as
+// an authenticated client (same ?user_id=&team_id= contract as every other
+// client). MCP_TIMEOUT_MS bounds one tool-call round-trip.
+export const WS_BACKEND_URL = process.env.WS_BACKEND_URL || 'ws://127.0.0.1:8080/ws';
+export const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS || 5000);
+// Public URL of this service's /mcp endpoint as agents see it. The endpoint is
+// MCP over HTTP (POST JSON-RPC) — the only transport a serverless function can
+// serve — so the default is the public URL + /mcp (https in production). Paste
+// THAT into Cursor / Claude Code; a wss:// URL would only fit a WebSocket
+// front, which serverless cannot host. Override with MCP_PUBLIC_URL if you
+// proxy /mcp through one.
+export const MCP_PUBLIC_URL = trimSlashes(process.env.MCP_PUBLIC_URL || `${PUBLIC_URL}/mcp`);
+
 
 // Express `trust proxy`. Leave unset locally; set to 1 (or a CIDR list) when the
 // service runs behind a load balancer so req.ip — and rate limiting — is honest.
@@ -102,6 +125,10 @@ export function loadConfig(overrides = {}) {
     dataDir: DATA_DIR,
     usersFile: USERS_FILE,
     sessionSecretFile: SESSION_SECRET_FILE,
+    pairingFile: PAIRING_FILE,
+    wsBackendUrl: WS_BACKEND_URL,
+    mcpTimeoutMs: MCP_TIMEOUT_MS,
+    mcpPublicUrl: MCP_PUBLIC_URL,
     trustProxy: TRUST_PROXY,
     serveStatic: SERVE_STATIC,
     sessionTtlMs: SESSION_TTL_MS,

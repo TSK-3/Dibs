@@ -15,6 +15,7 @@ export const Header: React.FC<HeaderProps> = ({ currentPath, onNavigate, user, o
   const navItems: { id: NavigationPath; label: string }[] = [
     { id: 'team-workspace', label: 'Team & Workspace' },
     { id: 'connect-agents', label: 'Connect Agents' },
+    { id: 'pair-agent', label: 'Pair Your Agent' },
     { id: 'agent-fleet-dashboard', label: 'Fleet Dashboard' },
     { id: 'auth', label: 'Login' },
   ];
