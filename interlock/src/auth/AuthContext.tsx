@@ -54,6 +54,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [refresh]);
 
   useEffect(() => {
+    const handleSessionExpired = () => {
+      setSession(null);
+      setStatus('unauthenticated');
+      setBusyProvider(null);
+      setError('Your sign-in expired. Please sign in again to continue.');
+    };
+    window.addEventListener('interlock:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('interlock:session-expired', handleSessionExpired);
+  }, []);
+
+  useEffect(() => {
     if (callback.status === 'success' && callback.provider) {
       setNotice(`Signed in with ${callback.provider}.`);
     }

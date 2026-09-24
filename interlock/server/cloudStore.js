@@ -35,7 +35,13 @@ export function cloudBackendFromEnv(env = process.env, { logger = console, fetch
 }
 
 /** Upstash REST adapter: one POST per command, body is a command array. */
-export function createUpstashRestBackend({ url, token, logger = console, fetchImpl = fetch } = {}) {
+export function createUpstashRestBackend({
+  url,
+  token,
+  logger = console,
+  fetchImpl = fetch,
+  timeoutMs = 750,
+} = {}) {
   if (!/^https:\/\/[\w.-]+/.test(url)) throw new Error('the Upstash REST URL must be an https:// URL');
   if (!token) throw new Error('the Upstash REST token is required');
 
@@ -43,14 +49,20 @@ export function createUpstashRestBackend({ url, token, logger = console, fetchIm
 
   const command = async (args) => {
     let response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       response = await fetchImpl(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(args),
+        signal: controller.signal,
       });
     } catch (err) {
-      throw new Error(`upstash unreachable: ${err?.message ?? err}`);
+      const detail = err?.name === 'AbortError' ? `timed out after ${timeoutMs}ms` : err?.message ?? err;
+      throw new Error(`upstash unreachable: ${detail}`);
+    } finally {
+      clearTimeout(timeout);
     }
     if (!response.ok) throw new Error(`upstash HTTP ${response.status}`);
     let body = null;

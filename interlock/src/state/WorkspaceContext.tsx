@@ -63,6 +63,18 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (status !== 'ready' || !activeId) return;
+    const timer = window.setInterval(() => {
+      void listWorkspaces()
+        .then((list) => setWorkspaces(list))
+        .catch(() => {
+          // Keep the last known roster visible during a transient request failure.
+        });
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [status, activeId]);
+
   // Drop a stored selection that no longer exists (deleted elsewhere, other
   // account, cleared server data) instead of gating the app on a ghost room.
   useEffect(() => {

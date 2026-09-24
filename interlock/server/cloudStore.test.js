@@ -9,6 +9,7 @@ import { cloudBackendFromEnv, createUpstashRestBackend, CLOUD_KEY_PREFIX } from 
 import { createLogger } from './logger.js';
 import { UserStore } from './users.js';
 import { WorkspaceStore } from './workspaces.js';
+import { createPostgresBackend, postgresBackendFromEnv } from './postgresStore.js';
 
 const SILENT = createLogger({ level: 'error', sink: { log() {}, info() {}, warn() {}, error() {} } });
 const SECRET = 'cloud-test-secret'.padEnd(48, 'x');
@@ -42,7 +43,7 @@ function fakeUpstash() {
   return { store, commands, fetchImpl };
 }
 
-/** The stores mirror mutations fire-and-forget; let the microtask flush. */
+/** Legacy helper for tests that exercise the stores without their barrier. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test('cloud storage is off unless both Upstash variables are set', () => {
@@ -56,6 +57,27 @@ test('cloud storage is off unless both Upstash variables are set', () => {
     { logger },
   );
   assert.equal(backend.kind, 'upstash-rest');
+});
+
+test('postgres storage activates from Vercel connection variables', () => {
+  assert.equal(postgresBackendFromEnv({}), null);
+  assert.equal(postgresBackendFromEnv({ POSTGRES_URL: 'postgres://example' }).kind, 'supabase-postgres');
+});
+
+test('postgres storage creates and round-trips snapshots', async () => {
+  const queries = [];
+  const pool = {
+    async query(sql, params = []) {
+      queries.push({ sql, params });
+      if (sql.startsWith('select snapshot')) return { rows: [{ snapshot: { version: 1 } }] };
+      return { rows: [] };
+    },
+  };
+  const backend = createPostgresBackend({ connectionString: 'postgres://example', pool, logger: SILENT });
+  assert.deepEqual(await backend.load('users'), { version: 1 });
+  assert.equal(await backend.save('users', { version: 2 }), true);
+  assert.ok(queries.some(({ sql }) => sql.includes('create table if not exists interlock_snapshots')));
+  assert.ok(queries.some(({ sql }) => sql.includes("jsonb_set") && sql.includes("'workspaces'")));
 });
 
 test('the backend round-trips a snapshot through GET/SET', async () => {
@@ -149,4 +171,35 @@ test('TEAM FLOW: a workspace created on instance A is joinable from instance B a
   assert.equal(record.members.some((m) => m.username === 'member'), true);
   assert.ok(workspacesC.findByCode(created.inviteCode), 'the invite code still resolves after the round-trip');
   assert.equal(workspacesC.listForUser(owner.id).length, 1);
+});
+
+test('mutations expose a persistence barrier for serverless responses', async () => {
+  let persisted = 0;
+  const users = new UserStore({
+    logger: SILENT,
+    encryptionKey: SECRET,
+    remoteSave: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      persisted += 1;
+    },
+  });
+  users.upsertFromProfile(profile('barrier-user', 'barrier'));
+  assert.equal(persisted, 0, 'the remote write is asynchronous');
+  await users.waitForPersistence();
+  assert.equal(persisted, 1);
+
+  const workspaces = new WorkspaceStore({
+    logger: SILENT,
+    remoteSave: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      persisted += 1;
+    },
+  });
+  workspaces.create({
+    owner: users.get(users.findByProvider('github', 'barrier-user').id),
+    name: 'Barrier',
+    repo: { fullName: 'octocat/barrier', private: false, defaultBranch: 'main', htmlUrl: null },
+  });
+  await workspaces.waitForPersistence();
+  assert.equal(persisted, 2);
 });

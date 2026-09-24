@@ -1,70 +1,70 @@
 # Interlock
 
-Interlock is a real-time intent-coordination system for teams working in the same codebase. Clients publish a structured development intent; when another active intent targets the same scope, the service immediately notifies both participants. This makes overlapping work visible before it becomes duplicated effort or a merge conflict.
+**Real-time intent coordination for teams whose AI coding agents share a codebase.**
+Publish what you're about to work on; the moment someone else's intent targets the
+same scope, *both of you* get an interrupt — before the duplicated effort or the
+merge conflict, not after.
 
-The repository contains three independently runnable components:
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-- The Node.js WebSocket service at the repository root.
-- The Expo mobile application and on-device speech-to-intent pipeline in [`mobile/`](mobile/README.md).
-- The Interlock web console and its OAuth identity service in [`interlock/`](interlock/README.md) —
-  Gmail and GitHub sign-in, sessions, and the fleet console UI.
+## What's in this repo
 
-## Web console
+Three independently runnable components:
+
+| Component | Path | What it does |
+|---|---|---|
+| **Live-interrupt backend** | `/` (root) | WebSocket service: intent publishing, exact scope matching, targeted interrupts, snapshot recovery, MCP stdio wrapper. |
+| **Web console** | [`interlock/`](interlock/README.md) | React + Vite console with real Google/GitHub OAuth, team workspaces with invite codes, GitHub repo selection, and a live Fleet Dashboard wired to the backend. |
+| **Mobile app** | [`mobile/`](mobile/README.md) | Expo app with on-device speech recognition and local, grammar-constrained intent extraction. |
+
+## Quick start (web console, end to end)
+
+Requirements: **Node.js 18.17+** (21+ for the agent CLI's global `WebSocket`).
 
 ```bash
+# 1. Backend
+npm install
+
+# 2. Web console (starts identity service :8787, Vite app :3000, backend :8090)
 cd interlock
 npm install
-npm run dev:full   # identity service (:8787) + Vite app (:3000)
+npm run dev:full
 ```
 
-Open `http://localhost:3000`. Sign-in supports **Gmail (Google)** and **GitHub**
-through the standard OAuth 2.0 authorization-code flow (PKCE + single-use signed
-`state`, HttpOnly session cookie). Credentials are required — there is no demo
-sign-in: an unconfigured provider is disabled in the UI and fails closed
-server-side. See [`interlock/README.md`](interlock/README.md) for the credential
-setup and the full API.
+Open **http://localhost:3000**. Optional: for Google/GitHub sign-in, copy
+`interlock/.env.example` → `interlock/.env.local` and add your OAuth credentials
+([setup guide](interlock/README.md)). Providers without credentials are disabled
+in the UI and fail closed server-side — everything else works out of the box.
 
-
-## Features
-
-- WebSocket-based intent publishing and targeted interrupt delivery.
-- Exact, closed-enum scope matching.
-- In-memory active claims with an atomic JSON snapshot for restart recovery.
-- State synchronization for reconnecting clients.
-- Optional authentication, rate limiting, connection caps, health checks, and metrics.
-- An MCP stdio wrapper for agent integrations.
-- On-device speech recognition and local, grammar-constrained intent extraction in the mobile application.
-
-## Quick start
-
-Requirements: Node.js 18.17 or later.
-
-```bash
-npm install
-npm start        # live-interrupt backend (:8080)
-```
-
-The web console needs it too — `cd interlock && npm run dev:full` starts the
-identity service (:8787), the Vite app (:3000), **and this backend (:8080 with
-`SCOPES_OPEN=1`)** together. Launch agents against the mesh:
+Launch an agent against the mesh from a second terminal:
 
 ```bash
 node scripts/agent.mjs --user cursor-ide --team <workspaceId> --scope auth
 ```
 
-The backend starts on `ws://localhost:8080/ws`. Open `http://localhost:8080/` in two browser tabs to use the included test bench.
+The Fleet Dashboard then shows live roster, claims, collisions, and interrupts —
+all real protocol traffic, no mocks.
 
-## Commands
+## Backend quick start (standalone)
 
-| Command | Description |
-|---|---|
-| `npm start` | Start the WebSocket service and HTTP test bench. |
-| `npm run dev` | Start the service in watch mode. |
-| `npm test` | Run the integration, lifecycle, and hardening tests. |
-| `npm run demo` | Run the narrated end-to-end demonstration. |
-| `npm run mcp` | Start the MCP stdio integration. |
+```bash
+npm install
+npm start        # ws://localhost:8080/ws + browser test bench at /
+npm test         # integration, lifecycle, and hardening tests
+npm run demo     # narrated end-to-end demonstration
+```
 
-To run the mobile application, change to `mobile/`, install its dependencies, and follow the [mobile setup guide](mobile/README.md).
+## Features
+
+- WebSocket-based intent publishing and targeted interrupt delivery.
+- Exact, closed-enum scope matching (opt-in open/hierarchical file-path scopes).
+- In-memory active claims with an atomic JSON snapshot for restart recovery.
+- State synchronization for reconnecting clients.
+- Real OAuth 2.0 sign-in (Google + GitHub, PKCE, HttpOnly session cookies).
+- Team workspaces with 6-digit invite codes, GitHub repo binding, and member rosters.
+- Optional auth token, rate limiting, connection caps, health checks, and metrics.
+- An MCP stdio wrapper for agent integrations.
+- On-device speech recognition and local intent extraction in the mobile app.
 
 ## Protocol
 
@@ -115,14 +115,15 @@ Release a completed intent with:
 
 Additional messages include `check_intent` / `scope_status`, `request_state` / `state`, `complete_ack`, `claim_expired`, and structured `error` responses.
 
-## Configuration
+## Configuration (backend)
 
-All settings are optional environment variables.
+All settings are optional environment variables (see [`.env.example`](.env.example)).
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | HTTP and WebSocket bind address. |
 | `SCOPES` | Built-in enum | Comma-separated list of allowed scopes. |
+| `SCOPES_OPEN` | off | Set `1` to accept arbitrary file-path scopes. |
 | `SCOPES_FILE` | — | Path to a JSON array or `{ "scopes": [] }` file. |
 | `SNAPSHOT_PATH` | `snapshots/claims-snapshot.json` | Claim snapshot location. |
 | `CLAIM_TTL_MS` | `0` | Optional active-claim expiration period. |
@@ -132,7 +133,11 @@ All settings are optional environment variables.
 | `PING_INTERVAL_MS` | `30000` | Socket health-check interval in milliseconds. |
 | `LOG_LEVEL` / `LOG_JSON` | `info` / off | Logging configuration. |
 
+Web-console configuration (OAuth, sessions, Vercel deployment) is documented in
+[`interlock/README.md`](interlock/README.md) and [`interlock/DEPLOY.md`](interlock/DEPLOY.md).
+
 Use the same scope list in the backend and mobile pipeline so extracted intents are always accepted by the service.
+
 
 ## Architecture
 
@@ -173,3 +178,13 @@ public/index.html       Browser-based test bench
 | `/stats` | Runtime counters and gauges. |
 
 For deployments outside a trusted network, configure `AUTH_TOKEN` and use a secure WebSocket endpoint (`wss://`).
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the local development setup, test
+requirements, and PR guidelines.
+
+## License
+
+[MIT](LICENSE)
+

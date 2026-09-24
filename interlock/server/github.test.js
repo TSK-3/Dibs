@@ -180,6 +180,26 @@ test('listRepos normalizes pages, stops at a short page, and maps failures to co
   assert.equal(unreachable.code, 'github_unreachable');
 });
 
+test('listRepos always uses the access token for the requesting identity', async () => {
+  const seenTokens = [];
+  const repoFor = {
+    token_a: { ...SAMPLE_REPO, id: 501, full_name: 'alice/project' },
+    token_b: { ...SAMPLE_REPO, id: 502, full_name: 'bob/project' },
+  };
+  const fetchImpl = async (url, init = {}) => {
+    const token = init.headers.Authorization.replace(/^Bearer\s+/, '');
+    seenTokens.push(token);
+    return jsonResponse([repoFor[token]]);
+  };
+
+  const alice = await listRepos({ accessToken: 'token_a', fetchImpl });
+  const bob = await listRepos({ accessToken: 'token_b', fetchImpl });
+
+  assert.deepEqual(alice.map((repo) => repo.fullName), ['alice/project']);
+  assert.deepEqual(bob.map((repo) => repo.fullName), ['bob/project']);
+  assert.deepEqual(seenTokens, ['token_a', 'token_b']);
+});
+
 // ── endpoint ─────────────────────────────────────────────────────────────────
 
 test('GET /api/github/repos requires a session', async () => {
@@ -247,5 +267,4 @@ test('a Google session is refused (403) and a GitHub session without a stored to
     await h.close();
   }
 });
-
 

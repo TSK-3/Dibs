@@ -50,3 +50,24 @@ ios/*.xcworkspace/xcuserdata/
 # Vercel CLI local state
 .vercel/
 
+# Local hackathon/agent artifacts (kept out of the open-source repo)
+brag-output*/
+mcp-smoke-*.txt
+mcp-srv-*.txt
+ui-shot-*.png
+prd-*.md
+PITCH.md
+progress.md
+.agents/
+.claude/
+skills-lock.json
+st.txt
+gs.txt
+lint.txt
+chk.txt
+clone.log
+clonelist.txt
+
+gs.txt
+.vercel
+.env*

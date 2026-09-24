@@ -28,6 +28,7 @@ export class UserStore {
     // Durable remote storage (serverless deploys, see server/cloudStore.js):
     // hydrate from a snapshot at boot and mirror every mutation back.
     this.remoteSave = remoteSave;
+    this.pendingSave = Promise.resolve();
     this.users = new Map(); // user_id → record
     if (initialSnapshot) {
       const count = this.hydrate(initialSnapshot);
@@ -127,12 +128,16 @@ export class UserStore {
   save() {
     const snapshot = this.serialize();
     if (this.remoteSave) {
-      // Fire-and-forget: the in-memory store stays authoritative for this
-      // instance; the mirror keeps other instances and cold starts current.
-      void Promise.resolve()
+      // Queue writes so mutations cannot overtake one another. API handlers
+      // await waitForPersistence before acknowledging a durable mutation.
+      this.pendingSave = this.pendingSave
+        .catch(() => {})
         .then(() => this.remoteSave(snapshot))
-        .catch((err) => this.log.error?.(`[users] remote save failed: ${err?.message ?? err}`));
+        .catch((err) => {
+          this.log.error?.(`[users] remote save failed: ${err?.message ?? err}`);
+        });
     }
+
     if (!this.filePath) return;
     const data = JSON.stringify(snapshot, null, 2);
     try {
@@ -153,6 +158,11 @@ export class UserStore {
     } catch (err) {
       this.log.error?.(`[users] snapshot write failed: ${err.message}`);
     }
+  }
+
+  /** Wait until the latest mutation has been mirrored to durable storage. */
+  async waitForPersistence() {
+    await this.pendingSave;
   }
 
   /** Shared restore path for file snapshots and remote (serverless) snapshots. */

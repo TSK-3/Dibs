@@ -39,6 +39,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     payload = null;
   }
   if (!response.ok || !payload?.ok) {
+    if (payload?.error === 'no_session' || payload?.error === 'unknown_identity') {
+      window.dispatchEvent(new CustomEvent('interlock:session-expired'));
+    }
     throw new ApiError(payload?.error ?? 'server_error', response.status, payload?.detail ?? null);
   }
   return payload as T;
